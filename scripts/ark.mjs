@@ -167,6 +167,7 @@ function dev(args) {
     HOST: host,
     NUXT_IGNORE_LOCK: '1',
     PORT: String(port),
+    VITE_HMR_PORT: String(parsePort(baseEnv.VITE_HMR_PORT ?? baseEnv.NUXT_HMR_PORT ?? port + 10000)),
   }
 
   if (!args['skip-migrate'])
