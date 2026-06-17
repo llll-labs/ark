@@ -426,12 +426,17 @@ async function ensureConfiguredAdmin(rootSpaceId: string) {
     return null
 
   const db = useDatabase()
-  const [existingAuthUser] = await db.select().from(arkAuthUsers).where(eq(arkAuthUsers.email, credentials.email)).limit(1)
-  const authUser = existingAuthUser ?? (await db.insert(arkAuthUsers).values({
+  const [authUser] = await db.insert(arkAuthUsers).values({
     email: credentials.email,
     emailVerified: true,
     name: credentials.name,
-  }).returning())[0]
+  }).onConflictDoUpdate({
+    set: {
+      emailVerified: true,
+      updatedAt: new Date(),
+    },
+    target: arkAuthUsers.email,
+  }).returning()
   if (!authUser)
     throw new Error('Admin auth user could not be created.')
 
@@ -457,13 +462,17 @@ async function ensureConfiguredAdmin(rootSpaceId: string) {
     }).onConflictDoNothing()
   }
 
-  const [existingArkUser] = await db.select().from(arkUsers).where(eq(arkUsers.authUserId, authUser.id)).limit(1)
-  const arkUser = existingArkUser ?? (await db.insert(arkUsers).values({
+  const [arkUser] = await db.insert(arkUsers).values({
     authUserId: authUser.id,
     displayName: credentials.name,
     kind: 'human',
     profileJson: { systemRole: 'admin' },
-  }).returning())[0]
+  }).onConflictDoUpdate({
+    set: {
+      updatedAt: new Date(),
+    },
+    target: arkUsers.authUserId,
+  }).returning()
   if (!arkUser)
     throw new Error('Admin Ark user could not be created.')
 
