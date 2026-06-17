@@ -13,16 +13,22 @@ tenant locale/theme/slug baked in (see `CONTRIBUTING.md`).
   - database: Drizzle + PGlite at `.ark/<PORT>/database`
   - uploads: local filesystem at `.ark/<PORT>/uploads`
   - cache: in-process Nitro memory
+- Worktrees are code namespaces. `PORT` is the runtime/network identity, and
+  `.ark/<PORT>` is the worktree-local port cell for database and uploads.
+- Use `ark dev --port <port>`, `ark status`, `ark kill --dry-run`, and
+  `ark worktree create <slug> --branch <branch> --port <port>` for generic local
+  developer operations.
 - Explicit env always wins: `DATABASE_URL` selects Postgres, `DB_DATA_DIR`
   overrides the PGlite path, `STORAGE_LOCAL_ROOT` overrides the upload path.
 - The reference `docker-compose.yml` (this dir) is the heavier opt-in profile;
   it is neutral (`ark`-prefixed, env-overridable), shipped for consumers to copy.
+- FRP/dev tunnels are consumer-specific and must stay out of Ark core.
 - **Boot guard**: `server/plugins/ark-preflight.ts` validates env at startup via
   `server/utils/preflight.mjs`. Contradictory/partial config (e.g. an s3 storage
   location missing its bucket) aborts boot in *any* mode; production-hardening
   gaps (weak secret, local storage, non-HTTPS origin) abort only when
   `NODE_ENV=production`, else warn. Zero-env local dev stays clean. The same
-  validator backs the `ark-preflight` CLI bin for CI/pre-deploy. Tenant apps add
+  validator backs `ark preflight` for CI/pre-deploy. Tenant apps add
   their own checks in their own server plugin — keep tenant policy (provider
   endpoints, AI keys, tenant secret literals) out of the core validator.
 

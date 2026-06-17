@@ -113,7 +113,7 @@ async function main() {
   const channels = await trpc.ark.channels.list.query({ spaceId: root.id })
   const channel = channels.find(row => row.slug === CHANNEL_SLUG)
   if (!channel)
-    throw new Error(`#${CHANNEL_SLUG} was not found. Run stress:seed:war-and-peace first.`)
+    throw new Error(`#${CHANNEL_SLUG} was not found. Run: ALLOW_STRESS_SEED=1 tsx scripts/seed-war-and-peace.ts`)
 
   const latest = await trpc.ark.messages.latest.query({ channelId: channel.id, limit: 50 })
   if (latest.items.length !== 50)

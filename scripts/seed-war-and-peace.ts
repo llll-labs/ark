@@ -60,8 +60,8 @@ type StressDb = any
 
 function usage() {
   console.log(`Usage:
-  ALLOW_STRESS_SEED=1 pnpm --filter @kurark/ark stress:seed:war-and-peace
-  ALLOW_STRESS_SEED=1 pnpm --filter @kurark/ark stress:seed:war-and-peace:reset
+  ALLOW_STRESS_SEED=1 tsx scripts/seed-war-and-peace.ts
+  ALLOW_STRESS_SEED=1 tsx scripts/seed-war-and-peace.ts --reset
 
 Options:
   --reset      Soft-delete existing War and Peace fixture messages/pins first.

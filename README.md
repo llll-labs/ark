@@ -47,6 +47,19 @@ Ark starts without infrastructure envs. By default it uses:
 
 In this workspace the default root is port-scoped, so `PORT=5400` maps to `.ark/5400/database` and `.ark/5400/uploads`. Set `PORT=5412` to run a second isolated local ark. Explicit `DB_DATA_DIR` and `STORAGE_LOCAL_ROOT` still win.
 
+For local development, use the Ark CLI from a tenant app or this repo:
+
+```bash
+ark dev --port 5412
+ark status
+ark kill --dry-run
+ark worktree create auth-flow --branch codex/auth-flow --port 5412
+```
+
+A worktree is the code namespace. `PORT` is the runtime and network identity.
+`.ark/<PORT>` is the worktree-local port cell for database and uploads. Public
+tunnels are consumer-specific and are not part of Ark core.
+
 Set `DATABASE_URL` to use external Postgres. Set `STORAGE_LOCATIONS` and `STORAGE_<LOCATION>_*` envs to use named storage locations. The storage env shape mirrors Directus-style driver configuration:
 
 ```env

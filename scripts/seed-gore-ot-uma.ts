@@ -177,8 +177,8 @@ let illustrationSourceUrlCache: Map<string, string> | null = null
 
 function usage() {
   console.log(`Usage:
-  ALLOW_STRESS_SEED=1 pnpm --filter @kurark/ark stress:seed:gore-ot-uma
-  ALLOW_STRESS_SEED=1 pnpm --filter @kurark/ark stress:seed:gore-ot-uma:reset
+  ALLOW_STRESS_SEED=1 tsx scripts/seed-gore-ot-uma.ts
+  ALLOW_STRESS_SEED=1 tsx scripts/seed-gore-ot-uma.ts --reset
 
 Options:
   --reset      Soft-delete existing Gore ot Uma fixture messages/pins first.
