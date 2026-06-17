@@ -1,0 +1,92 @@
+@import 'tailwindcss';
+
+@theme static {
+  --color-ark-primary-50: #effefe;
+  --color-ark-primary-100: #c7f8f8;
+  --color-ark-primary-200: #92eeee;
+  --color-ark-primary-300: #54dddd;
+  --color-ark-primary-400: #1bb9b9;
+  --color-ark-primary-500: #1bb9b9;
+  --color-ark-primary-600: #138f92;
+  --color-ark-primary-700: #147174;
+  --color-ark-primary-800: #16595d;
+  --color-ark-primary-900: #174a4d;
+  --color-ark-primary-950: #082b2e;
+}
+
+@import '@nuxt/ui';
+
+:root,
+:host,
+.light,
+.dark {
+  --ark-primary: #1bb9b9;
+  --ark-accent: #54dddd;
+  --ui-primary: #1bb9b9 !important;
+  --ui-color-primary-50: #effefe !important;
+  --ui-color-primary-100: #c7f8f8 !important;
+  --ui-color-primary-200: #92eeee !important;
+  --ui-color-primary-300: #54dddd !important;
+  --ui-color-primary-400: #1bb9b9 !important;
+  --ui-color-primary-500: #1bb9b9 !important;
+  --ui-color-primary-600: #138f92 !important;
+  --ui-color-primary-700: #147174 !important;
+  --ui-color-primary-800: #16595d !important;
+  --ui-color-primary-900: #174a4d !important;
+  --ui-color-primary-950: #082b2e !important;
+
+  /* Remap Nuxt UI neutral ramp to the Discord-style warm grays so semantic
+     tokens (bg-default/muted/elevated, text-muted, border-default, ...) resolve
+     to the existing surface colors. Note the ramp is intentionally non-monotonic:
+     the base surface (900 = #313338) is lighter than elevated cards (800 = #2b2d31),
+     matching the app's inverted dark palette. */
+  --ui-color-neutral-50: #f2f3f5 !important;
+  --ui-color-neutral-100: #e3e5e8 !important;
+  --ui-color-neutral-200: #dbdee1 !important;
+  --ui-color-neutral-300: #b5bac1 !important;
+  --ui-color-neutral-400: #949ba4 !important;
+  --ui-color-neutral-500: #80848e !important;
+  --ui-color-neutral-600: #5c5e66 !important;
+  --ui-color-neutral-700: #383a40 !important;
+  --ui-color-neutral-800: #2b2d31 !important;
+  --ui-color-neutral-900: #313338 !important;
+  --ui-color-neutral-950: #1e1f22 !important;
+}
+
+html,
+body,
+#__nuxt {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ui-bg);
+  color: var(--ui-text);
+}
+
+.ark-scrollbar {
+  scrollbar-color: #1e1f22 transparent;
+  scrollbar-width: thin;
+}
+
+.ark-scrollbar::-webkit-scrollbar {
+  width: 10px;
+}
+
+.ark-scrollbar::-webkit-scrollbar-thumb {
+  background: #1e1f22;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+.ark-surface {
+  border: 1px solid rgb(0 0 0 / 20%);
+  background: #2b2d31;
+}
+
+.ark-panel {
+  border: 1px solid rgb(0 0 0 / 20%);
+  background: #313338;
+}

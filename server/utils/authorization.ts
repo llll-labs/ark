@@ -1,0 +1,866 @@
+import type { H3Event } from 'h3'
+import type { ArkCapability, ArkCapabilityLike } from '../../db/zod'
+import { hashPassword } from 'better-auth/crypto'
+import { and, eq, inArray, isNull, or } from 'drizzle-orm'
+import { createError } from 'h3'
+import {
+  arkSettings,
+  arkUsers,
+  arkAuthAccounts,
+  arkAuthUsers,
+  arkChannelCategories,
+  arkChannelMembers,
+  arkChannels,
+  arkGrants,
+  arkMembershipRoles,
+  arkMemberships,
+  arkRoles,
+  arkSpaces,
+} from '../../db/schema'
+import { loadArkTenantCapabilitiesForRole } from './app-extensions'
+import { auth } from './auth'
+import { useDatabase } from './db'
+import { discordOAuthConfigured } from './discord-oauth'
+import { syncArkUserProviderAvatar } from './provider-avatar'
+
+type Session = Awaited<ReturnType<typeof getArkSession>>
+type ChannelRow = typeof arkChannels.$inferSelect
+type EffectiveCapabilities = Awaited<ReturnType<typeof getEffectiveCapabilities>>
+type ChannelAccessResult
+  = | { access: EffectiveCapabilities, allowed: true, channel: ChannelRow }
+    | { access?: EffectiveCapabilities, allowed: false, channel: ChannelRow | null, reason: string }
+interface AuthUser {
+  email: string
+  id: string
+  image?: null | string
+  name: string
+}
+
+export const defaultArkName = process.env.NUXT_PUBLIC_APP_NAME ?? 'Ark'
+
+export function virtualArk() {
+  return {
+    id: 'single',
+    name: defaultArkName,
+    slug: 'public',
+  }
+}
+
+async function syncProviderAvatarSafely(arkUser: typeof arkUsers.$inferSelect, authUser: AuthUser) {
+  try {
+    return await syncArkUserProviderAvatar(arkUser, authUser)
+  }
+  catch (error) {
+    console.warn('[ark] Provider avatar sync failed', error)
+    return arkUser
+  }
+}
+
+function slugifySpaceName(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80)
+}
+
+const ownerCapabilities: ArkCapability[] = [
+  'market.access',
+  'forum.access',
+  'knowledge.access',
+  'agent.access',
+  'dm.access',
+  'settings.read',
+  'settings.manage',
+  'spaces.read',
+  'spaces.manage',
+  'members.read',
+  'members.manage',
+  'roles.read',
+  'roles.manage',
+  'channels.read',
+  'channels.create',
+  'channels.manage',
+  'messages.read',
+  'messages.create',
+  'messages.manage',
+  'files.read',
+  'files.upload',
+  'files.manage',
+  'pages.read',
+  'pages.manage',
+  'items.read',
+  'items.create',
+  'items.update',
+  'items.manage',
+  'market.jobs.read',
+  'market.jobs.create',
+  'market.jobs.manage',
+]
+
+// Moderators: member baseline + curation, posting, channel & DM creation.
+// Not granted by default to anyone — assign the `moderator` role to roll out.
+const moderatorCapabilities: ArkCapability[] = [
+  'market.access',
+  'forum.access',
+  'knowledge.access',
+  'dm.access',
+  'settings.read',
+  'spaces.read',
+  'members.read',
+  'roles.read',
+  'channels.read',
+  'channels.create',
+  'channels.manage',
+  'messages.read',
+  'messages.create',
+  'messages.manage',
+  'files.read',
+  'files.upload',
+  'pages.read',
+  'items.read',
+  'items.create',
+  'items.update',
+  'market.jobs.read',
+  'market.jobs.create',
+  'market.jobs.manage',
+]
+
+const memberCapabilities: ArkCapability[] = [
+  'market.access',
+  'forum.access',
+  'knowledge.access',
+  'settings.read',
+  'spaces.read',
+  'channels.read',
+  'messages.read',
+  'messages.create',
+  'files.read',
+  'files.upload',
+  'pages.read',
+  'items.read',
+  'items.create',
+  'items.update',
+  'market.jobs.read',
+]
+
+const anonCapabilities: ArkCapability[] = [
+  'settings.read',
+]
+
+const operatorRoleKeys = new Set(['admin', 'owner'])
+
+function adminCredentials() {
+  const email = String(process.env.ADMIN_EMAIL ?? '').trim().toLowerCase()
+  const password = String(process.env.ADMIN_PASSWORD ?? '').trim()
+  if (!email || !password)
+    return null
+  return {
+    email,
+    name: String(process.env.ADMIN_NAME ?? `${defaultArkName} Admin`).trim() || `${defaultArkName} Admin`,
+    password,
+  }
+}
+
+async function ensureGrantsForSubject(input: {
+  actions: string[]
+  reconcile?: boolean
+  scopeId: string
+  subjectId?: null | string
+  subjectType: 'anon' | 'role'
+}) {
+  const db = useDatabase()
+  const existing = await db.select().from(arkGrants).where(and(
+    eq(arkGrants.status, 'active'),
+    eq(arkGrants.scopeType, 'space'),
+    eq(arkGrants.scopeId, input.scopeId),
+    eq(arkGrants.subjectType, input.subjectType),
+    input.subjectId ? eq(arkGrants.subjectId, input.subjectId) : isNull(arkGrants.subjectId),
+  ))
+  const existingActions = new Set(existing.filter(row => row.effect === 'allow').map(row => row.action))
+  const missing = input.actions.filter(action => !existingActions.has(action))
+  const desiredActions = new Set(input.actions)
+  const extra = input.reconcile
+    ? existing.filter(row => row.effect === 'allow' && !desiredActions.has(row.action))
+    : []
+  for (const grant of extra) {
+    await db.update(arkGrants).set({
+      status: 'inactive',
+      updatedAt: new Date(),
+    }).where(eq(arkGrants.id, grant.id))
+  }
+  if (!missing.length)
+    return
+
+  await db.insert(arkGrants).values(missing.map(action => ({
+    action,
+    effect: 'allow' as const,
+    scopeId: input.scopeId,
+    scopeType: 'space' as const,
+    subjectId: input.subjectId ?? null,
+    subjectType: input.subjectType,
+  })))
+}
+
+async function ensureDefaultPermissionRoles(rootSpaceId: string) {
+  const db = useDatabase()
+
+  await db.insert(arkRoles).values([
+    { isSystem: true, key: 'admin', name: 'Admin', rank: 120, scopeId: rootSpaceId, scopeType: 'space' },
+    { isSystem: true, key: 'owner', name: 'Owner', rank: 100, scopeId: rootSpaceId, scopeType: 'space' },
+    { isSystem: true, key: 'moderator', name: 'Moderator', rank: 50, scopeId: rootSpaceId, scopeType: 'space' },
+    { isSystem: true, key: 'member', name: 'Member', rank: 10, scopeId: rootSpaceId, scopeType: 'space' },
+  ]).onConflictDoNothing()
+
+  await db.update(arkRoles).set({
+    isSystem: true,
+    name: 'Admin',
+    rank: 120,
+    updatedAt: new Date(),
+  }).where(and(
+    eq(arkRoles.scopeType, 'space'),
+    eq(arkRoles.scopeId, rootSpaceId),
+    eq(arkRoles.key, 'admin'),
+  ))
+
+  const roleRows = await db.select().from(arkRoles).where(and(
+    eq(arkRoles.scopeType, 'space'),
+    eq(arkRoles.scopeId, rootSpaceId),
+  ))
+
+  const adminRole = roleRows.find(role => role.key === 'admin')
+  const ownerRole = roleRows.find(role => role.key === 'owner')
+  const moderatorRole = roleRows.find(role => role.key === 'moderator')
+  const memberRole = roleRows.find(role => role.key === 'member')
+
+  // Tenant capabilities registered via registerArkCapabilities() extend the
+  // built-in bundles for the roles they declared.
+  if (adminRole)
+    await ensureGrantsForSubject({ actions: [...ownerCapabilities, ...loadArkTenantCapabilitiesForRole('admin')], scopeId: rootSpaceId, subjectId: adminRole.id, subjectType: 'role' })
+  if (ownerRole)
+    await ensureGrantsForSubject({ actions: [...ownerCapabilities, ...loadArkTenantCapabilitiesForRole('owner')], scopeId: rootSpaceId, subjectId: ownerRole.id, subjectType: 'role' })
+  // Add-only (no reconcile): seeds the baseline if missing, but never strips
+  // grants — so the Permissions admin UI is the control plane and its toggles
+  // persist instead of being reverted on the next ensureDefaultArk call.
+  if (moderatorRole)
+    await ensureGrantsForSubject({ actions: [...moderatorCapabilities, ...loadArkTenantCapabilitiesForRole('moderator')], scopeId: rootSpaceId, subjectId: moderatorRole.id, subjectType: 'role' })
+  if (memberRole)
+    await ensureGrantsForSubject({ actions: [...memberCapabilities, ...loadArkTenantCapabilitiesForRole('member')], scopeId: rootSpaceId, subjectId: memberRole.id, subjectType: 'role' })
+  await ensureGrantsForSubject({ actions: [...anonCapabilities, ...loadArkTenantCapabilitiesForRole('anon')], scopeId: rootSpaceId, subjectId: null, subjectType: 'anon' })
+
+  return { adminRole, memberRole, moderatorRole, ownerRole }
+}
+
+export async function ensureDefaultChannelCategory(spaceId: string) {
+  const db = useDatabase()
+  const [existing] = await db.select().from(arkChannelCategories).where(and(
+    eq(arkChannelCategories.spaceId, spaceId),
+    eq(arkChannelCategories.slug, 'general'),
+    isNull(arkChannelCategories.deletedAt),
+  )).limit(1)
+  if (existing)
+    return existing
+
+  const [category] = await db.insert(arkChannelCategories).values({
+    name: 'General',
+    slug: 'general',
+    spaceId,
+  }).onConflictDoNothing().returning()
+  const resolved = category ?? (await db.select().from(arkChannelCategories).where(and(
+    eq(arkChannelCategories.spaceId, spaceId),
+    eq(arkChannelCategories.slug, 'general'),
+    isNull(arkChannelCategories.deletedAt),
+  )).limit(1))[0]
+  if (!resolved)
+    throw new Error('Default channel category could not be created')
+  return resolved
+}
+
+async function ensureDefaultChannels(rootSpaceId: string) {
+  const db = useDatabase()
+  const generalCategory = await ensureDefaultChannelCategory(rootSpaceId)
+
+  await db.insert(arkChannels).values([
+    {
+      kind: 'chat',
+      name: 'general',
+      slug: 'general',
+      spaceId: rootSpaceId,
+      topic: 'Logged-in marketplace discussion',
+      visibility: 'registered',
+    },
+    {
+      kind: 'chat',
+      name: 'owners',
+      slug: 'owners',
+      spaceId: rootSpaceId,
+      topic: 'Operator notifications and discussion',
+      visibility: 'private',
+    },
+    {
+      categoryId: generalCategory?.id,
+      kind: 'forum',
+      name: 'forum',
+      slug: 'forum',
+      spaceId: rootSpaceId,
+      topic: 'Marketplace forum',
+      visibility: 'registered',
+    },
+  ]).onConflictDoNothing()
+
+  await db.update(arkChannels).set({
+    topic: 'Logged-in marketplace discussion',
+    updatedAt: new Date(),
+    visibility: 'registered',
+  }).where(and(
+    eq(arkChannels.spaceId, rootSpaceId),
+    eq(arkChannels.slug, 'general'),
+  ))
+  await db.update(arkChannels).set({
+    categoryId: generalCategory?.id,
+    topic: 'Marketplace forum',
+    updatedAt: new Date(),
+    visibility: 'registered',
+  }).where(and(
+    eq(arkChannels.spaceId, rootSpaceId),
+    eq(arkChannels.slug, 'forum'),
+  ))
+  if (generalCategory) {
+    await db.update(arkChannels).set({
+      categoryId: generalCategory.id,
+      updatedAt: new Date(),
+    }).where(and(
+      eq(arkChannels.spaceId, rootSpaceId),
+      eq(arkChannels.kind, 'forum'),
+      isNull(arkChannels.categoryId),
+    ))
+  }
+}
+
+async function syncOperatorChannelMembers(rootSpaceId: string) {
+  const db = useDatabase()
+  const [ownersChannel] = await db.select().from(arkChannels).where(and(
+    eq(arkChannels.spaceId, rootSpaceId),
+    eq(arkChannels.slug, 'owners'),
+  )).limit(1)
+  if (!ownersChannel)
+    return
+
+  const operatorRoles = await db.select().from(arkRoles).where(and(
+    eq(arkRoles.scopeType, 'space'),
+    eq(arkRoles.scopeId, rootSpaceId),
+    inArray(arkRoles.key, Array.from(operatorRoleKeys)),
+  ))
+  const operatorRoleIds = operatorRoles.map(role => role.id)
+  if (!operatorRoleIds.length)
+    return
+
+  const activeMemberships = await db.select().from(arkMemberships).where(and(
+    eq(arkMemberships.scopeType, 'space'),
+    eq(arkMemberships.scopeId, rootSpaceId),
+    eq(arkMemberships.status, 'active'),
+  ))
+  if (!activeMemberships.length)
+    return
+
+  const directOperatorMembershipIds = new Set(
+    activeMemberships
+      .filter(row => row.roleId && operatorRoleIds.includes(row.roleId))
+      .map(row => row.id),
+  )
+  const assignedOperatorRows = await db.select().from(arkMembershipRoles).where(and(
+    eq(arkMembershipRoles.status, 'active'),
+    inArray(arkMembershipRoles.membershipId, activeMemberships.map(row => row.id)),
+    inArray(arkMembershipRoles.roleId, operatorRoleIds),
+  ))
+  for (const row of assignedOperatorRows)
+    directOperatorMembershipIds.add(row.membershipId)
+
+  const operatorUserIds = activeMemberships
+    .filter(row => directOperatorMembershipIds.has(row.id))
+    .map(row => row.arkUserId)
+  if (!operatorUserIds.length)
+    return
+
+  await db.insert(arkChannelMembers).values(operatorUserIds.map(arkUserId => ({
+    arkUserId,
+    channelId: ownersChannel.id,
+    role: 'member',
+    status: 'active' as const,
+  }))).onConflictDoNothing()
+}
+
+async function ensureMembershipRole(input: { arkUserId: string, roleId?: string, rootSpaceId: string }) {
+  if (!input.roleId)
+    return null
+
+  const db = useDatabase()
+  const [membership] = await db.insert(arkMemberships).values({
+    arkUserId: input.arkUserId,
+    joinedAt: new Date(),
+    roleId: input.roleId,
+    scopeId: input.rootSpaceId,
+    scopeType: 'space',
+    status: 'active',
+  }).onConflictDoUpdate({
+    set: {
+      roleId: input.roleId,
+      status: 'active',
+      updatedAt: new Date(),
+    },
+    target: [arkMemberships.scopeType, arkMemberships.scopeId, arkMemberships.arkUserId],
+  }).returning()
+
+  if (membership) {
+    await db.insert(arkMembershipRoles).values({
+      membershipId: membership.id,
+      roleId: input.roleId,
+    }).onConflictDoNothing()
+  }
+  return membership
+}
+
+async function ensureConfiguredAdmin(rootSpaceId: string) {
+  const credentials = adminCredentials()
+  if (!credentials)
+    return null
+
+  const db = useDatabase()
+  const [existingAuthUser] = await db.select().from(arkAuthUsers).where(eq(arkAuthUsers.email, credentials.email)).limit(1)
+  const authUser = existingAuthUser ?? (await db.insert(arkAuthUsers).values({
+    email: credentials.email,
+    emailVerified: true,
+    name: credentials.name,
+  }).returning())[0]
+  if (!authUser)
+    throw new Error('Admin auth user could not be created.')
+
+  const [existingAccount] = await db.select().from(arkAuthAccounts).where(and(
+    eq(arkAuthAccounts.providerId, 'credential'),
+    eq(arkAuthAccounts.userId, authUser.id),
+  )).limit(1)
+  if (existingAccount) {
+    if (!existingAccount.password || existingAccount.accountId !== authUser.id) {
+      await db.update(arkAuthAccounts).set({
+        accountId: authUser.id,
+        password: existingAccount.password ?? await hashPassword(credentials.password),
+        updatedAt: new Date(),
+      }).where(eq(arkAuthAccounts.id, existingAccount.id))
+    }
+  }
+  else {
+    await db.insert(arkAuthAccounts).values({
+      accountId: authUser.id,
+      password: await hashPassword(credentials.password),
+      providerId: 'credential',
+      userId: authUser.id,
+    }).onConflictDoNothing()
+  }
+
+  const [existingArkUser] = await db.select().from(arkUsers).where(eq(arkUsers.authUserId, authUser.id)).limit(1)
+  const arkUser = existingArkUser ?? (await db.insert(arkUsers).values({
+    authUserId: authUser.id,
+    displayName: credentials.name,
+    kind: 'human',
+    profileJson: { systemRole: 'admin' },
+  }).returning())[0]
+  if (!arkUser)
+    throw new Error('Admin Ark user could not be created.')
+
+  const [adminRole] = await db.select().from(arkRoles).where(and(
+    eq(arkRoles.scopeType, 'space'),
+    eq(arkRoles.scopeId, rootSpaceId),
+    eq(arkRoles.key, 'admin'),
+  )).limit(1)
+
+  const membership = await ensureMembershipRole({ arkUserId: arkUser.id, roleId: adminRole?.id, rootSpaceId })
+  void membership
+  await syncOperatorChannelMembers(rootSpaceId)
+  return arkUser
+}
+
+export async function getArkSession(event: H3Event) {
+  return auth.api.getSession({
+    headers: event.headers,
+  })
+}
+
+export async function requireAuthUser(event: H3Event) {
+  const session = await getArkSession(event)
+  if (!session?.user) {
+    throw createError({
+      statusCode: 401,
+      statusMessage: 'Authentication required',
+    })
+  }
+  return session
+}
+
+export async function ensureDefaultArk() {
+  const db = useDatabase()
+
+  await db.insert(arkSettings).values({
+    authJson: {
+      discord_enabled: discordOAuthConfigured(),
+      email_password_enabled: true,
+      registration_enabled: true,
+      registration_mode: 'open',
+      telegram_enabled: Boolean(String(process.env.TELEGRAM_BOT_TOKEN ?? '').trim()),
+    },
+    name: defaultArkName,
+    onboardingJson: {
+      // Neutral core default. Tenants extend this field list (or replace the
+      // onboarding flow with their own component) via ark settings.
+      onboarding_fields: ['name', 'bio'],
+      onboarding_method: 'onboarding',
+      review_required: false,
+    },
+    dataJson: {},
+    portalJson: {
+      default_route: '/app/jobs',
+      public_root_unscoped: true,
+    },
+    primaryColor: '#0B0F12',
+    accentColor: '#00D1C1',
+  }).onConflictDoNothing()
+
+  const [existingRoot] = await db.select().from(arkSpaces).where(and(
+    isNull(arkSpaces.deletedAt),
+    or(
+      eq(arkSpaces.isDefault, true),
+      and(isNull(arkSpaces.parentSpaceId), eq(arkSpaces.slug, 'public')),
+    ),
+  )).limit(1)
+  if (existingRoot) {
+    if (!existingRoot.isDefault || existingRoot.slug !== 'public' || existingRoot.name !== 'Public' || existingRoot.visibility !== 'registered') {
+      await db.update(arkSpaces).set({
+        isDefault: true,
+        name: 'Public',
+        slug: 'public',
+        updatedAt: new Date(),
+        visibility: 'registered',
+      }).where(eq(arkSpaces.id, existingRoot.id))
+    }
+    await ensureDefaultPermissionRoles(existingRoot.id)
+    await ensureDefaultChannels(existingRoot.id)
+    await ensureConfiguredAdmin(existingRoot.id)
+    await syncOperatorChannelMembers(existingRoot.id)
+    return virtualArk()
+  }
+
+  const insertedSpaces = await db.insert(arkSpaces).values([
+    {
+      inheritAccess: true,
+      isDefault: true,
+      kind: 'public_square',
+      name: 'Public',
+      slug: 'public',
+      visibility: 'registered',
+    },
+  ]).onConflictDoNothing().returning()
+
+  const root = insertedSpaces.find(space => space.slug === 'public')
+    ?? (await db.select().from(arkSpaces).where(and(
+      isNull(arkSpaces.deletedAt),
+      isNull(arkSpaces.parentSpaceId),
+      eq(arkSpaces.slug, 'public'),
+    )).limit(1))[0]
+  if (!root)
+    return virtualArk()
+
+  await ensureDefaultPermissionRoles(root.id)
+  await ensureDefaultChannels(root.id)
+  await ensureConfiguredAdmin(root.id)
+
+  return virtualArk()
+}
+
+export async function getDefaultArk() {
+  return ensureDefaultArk()
+}
+
+export async function ensureArkUser(authUser: AuthUser) {
+  const db = useDatabase()
+  await ensureDefaultArk()
+
+  const [existing] = await db
+    .select()
+    .from(arkUsers)
+    .where(eq(arkUsers.authUserId, authUser.id))
+    .limit(1)
+
+  if (existing)
+    return syncProviderAvatarSafely(existing, authUser)
+
+  const [created] = await db.insert(arkUsers).values({
+    authUserId: authUser.id,
+    displayName: authUser.name || authUser.email.split('@')[0] || 'member',
+    kind: 'human',
+  }).returning()
+  if (!created)
+    throw new Error('Ark user could not be created.')
+
+  const root = await getPublicSpace()
+  if (root) {
+    const credentials = adminCredentials()
+    const roleKey = credentials?.email === authUser.email.toLowerCase()
+      ? 'admin'
+      : 'member'
+    const [role] = await db.select().from(arkRoles).where(and(
+      eq(arkRoles.scopeType, 'space'),
+      eq(arkRoles.scopeId, root.id),
+      eq(arkRoles.key, roleKey),
+    )).limit(1)
+    const [membership] = await db.insert(arkMemberships).values({
+      arkUserId: created.id,
+      joinedAt: new Date(),
+      roleId: role?.id,
+      scopeId: root.id,
+      scopeType: 'space',
+      status: 'active',
+    }).onConflictDoNothing().returning()
+    if (membership) {
+      if (role)
+        await db.insert(arkMembershipRoles).values({ membershipId: membership.id, roleId: role.id }).onConflictDoNothing()
+      if (role && operatorRoleKeys.has(role.key))
+        await syncOperatorChannelMembers(root.id)
+    }
+  }
+
+  // Every user gets a personal account space — an organization with a single
+  // owner member. Personal vs company is just member count; the market actor is
+  // always a space, never the raw user.
+  const baseSlug = slugifySpaceName(created.displayName) || `user-${created.id.slice(0, 8)}`
+  let personalSlug = baseSlug
+  for (let attempt = 2; attempt <= 50; attempt += 1) {
+    const [taken] = await db.select({ id: arkSpaces.id }).from(arkSpaces).where(and(
+      isNull(arkSpaces.parentSpaceId),
+      eq(arkSpaces.slug, personalSlug),
+    )).limit(1)
+    if (!taken)
+      break
+    personalSlug = `${baseSlug}-${attempt}`
+  }
+  const [personal] = await db.insert(arkSpaces).values({
+    inheritAccess: false,
+    kind: 'organization',
+    name: created.displayName,
+    ownerArkUserId: created.id,
+    slug: personalSlug,
+    status: 'active',
+    visibility: 'private',
+  }).returning()
+  if (personal) {
+    const { ownerRole } = await ensureDefaultPermissionRoles(personal.id)
+    const [personalMembership] = await db.insert(arkMemberships).values({
+      arkUserId: created.id,
+      joinedAt: new Date(),
+      roleId: ownerRole?.id,
+      scopeId: personal.id,
+      scopeType: 'space',
+      status: 'active',
+    }).onConflictDoNothing().returning()
+    if (personalMembership && ownerRole)
+      await db.insert(arkMembershipRoles).values({ membershipId: personalMembership.id, roleId: ownerRole.id }).onConflictDoNothing()
+  }
+
+  return syncProviderAvatarSafely(created, authUser)
+}
+
+export async function currentArkUser(session: Session) {
+  if (!session?.user)
+    return null
+  return ensureArkUser(session.user)
+}
+
+export async function getPublicSpace() {
+  const db = useDatabase()
+  await ensureDefaultArk()
+  const [root] = await db.select().from(arkSpaces).where(and(eq(arkSpaces.isDefault, true), isNull(arkSpaces.deletedAt))).limit(1)
+  return root ?? null
+}
+
+export async function getDmSpace() {
+  return getPublicSpace()
+}
+
+export async function getSpaceAccessScope(spaceId: string) {
+  const db = useDatabase()
+  const rows = []
+  let currentSpaceId: string | null = spaceId
+
+  while (currentSpaceId) {
+    const [space] = await db.select().from(arkSpaces).where(eq(arkSpaces.id, currentSpaceId)).limit(1)
+    if (!space || space.deletedAt)
+      break
+    rows.push(space)
+    currentSpaceId = space.inheritAccess ? space.parentSpaceId : null
+  }
+
+  return rows
+}
+
+export async function getEffectiveCapabilities(spaceId: string, session: Session) {
+  const db = useDatabase()
+  const scope = await getSpaceAccessScope(spaceId)
+  const spaceIds = scope.map(space => space.id)
+  if (scope.length === 0) {
+    return { capabilities: [] as string[], spaceIds, spaces: scope }
+  }
+
+  const arkUser = await currentArkUser(session)
+  const activeMemberships = arkUser
+    ? await db.select().from(arkMemberships).where(and(
+        eq(arkMemberships.arkUserId, arkUser.id),
+        eq(arkMemberships.status, 'active'),
+      ))
+    : []
+  const activeMembershipIds = new Set(activeMemberships.map(row => row.id))
+  const assignedRoleIds = new Set(activeMemberships.map(row => row.roleId).filter((value): value is string => Boolean(value)))
+  if (activeMemberships.length) {
+    const assignedRows = await db.select().from(arkMembershipRoles).where(and(
+      eq(arkMembershipRoles.status, 'active'),
+      inArray(arkMembershipRoles.membershipId, activeMemberships.map(row => row.id)),
+    ))
+    for (const row of assignedRows)
+      assignedRoleIds.add(row.roleId)
+  }
+  const assignedRoles = assignedRoleIds.size
+    ? await db.select().from(arkRoles).where(inArray(arkRoles.id, Array.from(assignedRoleIds)))
+    : []
+  const activeRoleIds = new Set(assignedRoles.map(role => role.id))
+
+  const scopedGrants = await db.select().from(arkGrants).where(and(
+    eq(arkGrants.status, 'active'),
+    inArray(arkGrants.scopeId, spaceIds),
+  ))
+  const globalGrants = await db.select().from(arkGrants).where(and(
+    eq(arkGrants.status, 'active'),
+    eq(arkGrants.scopeType, 'global'),
+    isNull(arkGrants.scopeId),
+  ))
+
+  const denied = new Set<string>()
+  const allowed = new Set<string>()
+  for (const grant of [...globalGrants, ...scopedGrants]) {
+    const action = grant.action
+    const matches = grant.subjectType === 'anon'
+      || (grant.subjectType === 'authenticated' && !!arkUser)
+      || (grant.subjectType === 'ark_user' && grant.subjectId === arkUser?.id)
+      || (grant.subjectType === 'role' && !!grant.subjectId && activeRoleIds.has(grant.subjectId))
+      || (grant.subjectType === 'membership' && !!grant.subjectId && activeMembershipIds.has(grant.subjectId))
+
+    if (!matches)
+      continue
+    if (grant.effect === 'deny')
+      denied.add(action)
+    else
+      allowed.add(action)
+  }
+
+  for (const capability of denied)
+    allowed.delete(capability)
+
+  return {
+    arkUser,
+    capabilities: Array.from(allowed).sort(),
+    spaceIds,
+    spaces: scope,
+  }
+}
+
+export async function canReadChannel(channelId: string, session: Session): Promise<ChannelAccessResult> {
+  const db = useDatabase()
+  const [channel] = await db.select().from(arkChannels).where(eq(arkChannels.id, channelId)).limit(1)
+  if (!channel || channel.deletedAt)
+    return { allowed: false, channel: null, reason: 'not_found' }
+
+  if (channel.kind === 'thread') {
+    if (!channel.threadParentChannelId)
+      return { allowed: false, channel, reason: 'thread_parent_missing' }
+    const parentAccess: ChannelAccessResult = await canReadChannel(channel.threadParentChannelId, session)
+    if (!parentAccess.allowed)
+      return { access: parentAccess.access, allowed: false, channel, reason: parentAccess.reason }
+    return { allowed: true, access: parentAccess.access, channel }
+  }
+
+  const access = await getEffectiveCapabilities(channel.spaceId, session)
+  if (!access.capabilities.includes('channels.read'))
+    return { allowed: false, access, channel, reason: 'missing_capability' }
+
+  if (channel.kind === 'forum' && !access.capabilities.includes('forum.access'))
+    return { allowed: false, access, channel, reason: 'missing_capability' }
+
+  if (channel.visibility !== 'private' && channel.kind !== 'dm')
+    return { allowed: true, access, channel }
+
+  if (!access.arkUser)
+    return { allowed: false, access, channel, reason: 'channel_membership_required' }
+
+  const [member] = await db.select().from(arkChannelMembers).where(and(
+    eq(arkChannelMembers.channelId, channel.id),
+    eq(arkChannelMembers.arkUserId, access.arkUser.id),
+    eq(arkChannelMembers.status, 'active'),
+  )).limit(1)
+
+  if (!member)
+    return { allowed: false, access, channel, reason: 'channel_membership_required' }
+  return { allowed: true, access, channel }
+}
+
+export async function requireSpaceCapability(event: H3Event, spaceId: string, capability: ArkCapabilityLike) {
+  const session = await getArkSession(event)
+  const access = await getEffectiveCapabilities(spaceId, session)
+  if (!access.capabilities.includes(capability)) {
+    throw createError({
+      statusCode: 403,
+      statusMessage: `Missing capability: ${capability}`,
+    })
+  }
+  return { access, session }
+}
+
+export async function requirePublicCapability(event: H3Event, capability: ArkCapabilityLike) {
+  const root = await getPublicSpace()
+  if (!root) {
+    throw createError({
+      statusCode: 404,
+      statusMessage: 'Public space not found',
+    })
+  }
+  return requireSpaceCapability(event, root.id, capability)
+}
+
+export async function requireChannelCapability(event: H3Event, channelId: string, capability: ArkCapabilityLike) {
+  const session = await getArkSession(event)
+  const channelAccess = await canReadChannel(channelId, session)
+  if (!channelAccess.allowed) {
+    throw createError({
+      statusCode: channelAccess.reason === 'not_found' ? 404 : 403,
+      statusMessage: channelAccess.reason ?? 'Channel access denied',
+    })
+  }
+
+  if (!channelAccess.access.capabilities.includes(capability)) {
+    throw createError({
+      statusCode: 403,
+      statusMessage: `Missing capability: ${capability}`,
+    })
+  }
+
+  return {
+    access: channelAccess.access,
+    channel: channelAccess.channel,
+    session,
+  }
+}
+
+export async function getArkMemberships(authUserId: string) {
+  const db = useDatabase()
+  const [arkUser] = await db.select().from(arkUsers).where(eq(arkUsers.authUserId, authUserId)).limit(1)
+
+  if (!arkUser)
+    return []
+
+  return db.select().from(arkMemberships).where(eq(arkMemberships.arkUserId, arkUser.id))
+}
