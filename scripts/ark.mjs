@@ -169,6 +169,7 @@ function dev(args) {
     PORT: String(port),
     VITE_HMR_PORT: String(parsePort(baseEnv.VITE_HMR_PORT ?? baseEnv.NUXT_HMR_PORT ?? port + 10000)),
   }
+  env.NUXT_HMR_PORT ||= env.VITE_HMR_PORT
 
   if (!args['skip-migrate'])
     run('pnpm', ['db:migrate'], { env })
