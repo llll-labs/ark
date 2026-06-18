@@ -1,24 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
+import { config as loadDotenv } from 'dotenv'
 
-function loadEnvFile(path: string) {
-  if (!existsSync(path))
-    return
-
-  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#'))
-      continue
-    const separator = trimmed.indexOf('=')
-    if (separator <= 0)
-      continue
-    const key = trimmed.slice(0, separator).trim()
-    const value = trimmed.slice(separator + 1).trim().replace(/^(['"])(.*)\1$/, '$2')
-    process.env[key] ??= value
-  }
-}
-
-loadEnvFile(resolve(process.cwd(), '.env'))
+loadDotenv({ path: resolve(process.cwd(), '.env'), quiet: true })
 
 function findWorkspaceRoot(start: string) {
   let current = resolve(start)

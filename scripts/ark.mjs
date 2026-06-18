@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { copyFileSync, mkdirSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { config as loadDotenv } from 'dotenv'
 
 const arkRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -103,30 +104,18 @@ function parsePort(value, fallback = 5400) {
   return port
 }
 
-function loadEnvFile(path) {
-  if (!existsSync(path))
-    return {}
-
-  const env = {}
-  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#'))
-      continue
-
-    const separator = trimmed.indexOf('=')
-    if (separator <= 0)
-      continue
-
-    const key = trimmed.slice(0, separator).trim()
-    const value = trimmed.slice(separator + 1).trim().replace(/^(['"])(.*)\1$/, '$2')
-    env[key] = value
-  }
+function envWithDotenv(baseEnv = process.env) {
+  const env = { ...baseEnv }
+  loadDotenv({
+    path: resolve(process.cwd(), '.env'),
+    processEnv: env,
+    quiet: true,
+  })
   return env
 }
 
 function envWithPortCell(baseEnv = process.env, options = {}) {
-  const fileEnv = loadEnvFile(resolve(process.cwd(), '.env'))
-  const env = { ...fileEnv, ...baseEnv }
+  const env = envWithDotenv(baseEnv)
   if (options.port)
     env.PORT = String(options.port)
 
@@ -158,8 +147,7 @@ function run(command, args, options = {}) {
 }
 
 function dev(args) {
-  const fileEnv = loadEnvFile(resolve(process.cwd(), '.env'))
-  const baseEnv = { ...fileEnv, ...process.env }
+  const baseEnv = envWithDotenv(process.env)
   const port = parsePort(args.port ?? baseEnv.PORT ?? 5400)
   const host = String(args.host ?? baseEnv.HOST ?? '127.0.0.1')
   const env = {
