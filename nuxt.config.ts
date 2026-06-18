@@ -136,7 +136,16 @@ export default defineNuxtConfig({
       hmr: devHmrConfig(),
     },
   },
+  hooks: {
+    'vite:extendConfig'(config, { isServer }) {
+      if (!isServer)
+        return
+
+      config.server ||= {}
+      config.server.hmr = devHmrConfig()
+    },
+  },
   devtools: {
-    enabled: true,
+    enabled: false,
   },
 })
