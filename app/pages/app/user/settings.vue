@@ -12,6 +12,6 @@ async function closeSettings() {
 
 <template>
   <div class="h-full min-h-0 bg-default text-default">
-    <ArkUserSettingsPanel @close="closeSettings" />
+    <ArkUserSettingsPanel show-close @close="closeSettings" />
   </div>
 </template>
