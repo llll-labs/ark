@@ -9437,30 +9437,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "section_role": {
-          "name": "section_role",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "section_do": {
-          "name": "section_do",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "section_know": {
-          "name": "section_know",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "section_company": {
-          "name": "section_company",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "kind": {
           "name": "kind",
           "type": "text",
@@ -9600,6 +9576,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "source_locale": {
+          "name": "source_locale",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'unknown'"
         },
         "contact_json": {
           "name": "contact_json",
