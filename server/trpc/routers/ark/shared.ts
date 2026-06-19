@@ -111,6 +111,7 @@ export { loadArkUserExtension } from '../../../utils/app-extensions'
 export {
   canReadChannel,
   currentArkUser,
+  defaultArkIdentity,
   defaultArkSettingsValues,
   ensureDefaultArk,
   ensureDefaultChannelCategory,

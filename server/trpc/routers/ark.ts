@@ -8,6 +8,7 @@ import {
   baseProcedure,
   createTRPCRouter,
   currentArkUser,
+  defaultArkIdentity,
   ensureDefaultArk,
   eq,
   getDefaultArk,
@@ -16,7 +17,6 @@ import {
   loadArkUserExtension,
   arkMemberships,
   sql,
-  virtualArk,
 } from './ark/shared'
 import { membersRouter, permissionsRouter, rolesRouter, spacesRouter } from './ark/spaces'
 import { usersRouter } from './ark/users'
@@ -31,7 +31,7 @@ export const arkRouter = createTRPCRouter({
   me: baseProcedure.query(async ({ ctx }) => {
     if (!ctx.session?.user) {
       return {
-        ark: virtualArk(),
+        ark: defaultArkIdentity(),
         arkUser: null,
         arkUserExtension: null,
         authenticated: false,
