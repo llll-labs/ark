@@ -130,6 +130,8 @@ export function useArkAuth() {
         })
         if (!result?.user)
           return null
+        if (checked.value && me.value?.authenticated)
+          return me.value
 
         me.value = {
           ark: defaultArkState(),
