@@ -21,11 +21,17 @@ interface ArkAuthRegisterInput {
 interface ArkMeState {
   ark: { id: string, name: string, slug: string }
   arkUser: null | Record<string, any>
+  arkUserExtension: null | Record<string, any>
   authenticated: boolean
   capabilities: string[]
   memberships: Record<string, any>[]
   session: null | Record<string, any>
   user: null | Record<string, any>
+}
+
+interface BetterAuthSessionState {
+  session?: null | Record<string, any>
+  user?: null | Record<string, any>
 }
 
 function authErrorMessage(error: unknown, fallback: string) {
@@ -62,6 +68,10 @@ export function useArkAuth() {
   const profile = computed(() => me.value?.arkUser ?? null)
   const authenticated = computed(() => Boolean(me.value?.authenticated))
 
+  function defaultArkState() {
+    return me.value?.ark ?? { id: 'single', name: 'Ark', slug: 'public' }
+  }
+
   function localeHeaders(): Record<string, string> {
     const locale = (nuxtApp.$i18n as { locale?: string | { value?: string } } | undefined)?.locale
     const code = typeof locale === 'string' ? locale : locale?.value
@@ -88,6 +98,34 @@ export function useArkAuth() {
     }
     finally {
       checking.value = false
+    }
+  }
+
+  async function checkSession() {
+    if (me.value?.authenticated)
+      return me.value
+
+    try {
+      const result = await $fetch<BetterAuthSessionState | null>('/api/auth/get-session', {
+        credentials: 'include',
+      })
+      if (!result?.user)
+        return null
+
+      me.value = {
+        ark: defaultArkState(),
+        arkUser: null,
+        arkUserExtension: null,
+        authenticated: true,
+        capabilities: [],
+        memberships: [],
+        session: result.session ?? null,
+        user: result.user,
+      }
+      return me.value
+    }
+    catch {
+      return null
     }
   }
 
@@ -252,6 +290,7 @@ export function useArkAuth() {
   return {
     authenticated,
     check,
+    checkSession,
     checked,
     checking,
     error,
