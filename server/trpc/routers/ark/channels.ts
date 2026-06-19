@@ -5,20 +5,17 @@ import {
   asc,
   baseProcedure,
   byIdSchema,
-  canReadChannel,
   arkChannelCategories,
   channelCreateSchema,
   arkChannelMembers,
   arkChannels,
   createTRPCRouter,
-  currentArkUser,
   desc,
   dmUpsertSchema,
   ensureDefaultChannelCategory,
   eq,
   getChannelForAccess,
   getDmSpace,
-  getPublicSpace,
   inArray,
   isNull,
   messageCreateSchema,
@@ -61,7 +58,7 @@ const uuidInput = z.uuid()
 
 export const channelCategoriesRouter = createTRPCRouter({
   list: baseProcedure.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
-    await requireSpaceAccess(input.spaceId, ctx.session, 'channels.read')
+    await requireSpaceAccess(input.spaceId, ctx, 'channels.read')
     return ctx.db.select().from(arkChannelCategories).where(and(
       eq(arkChannelCategories.spaceId, input.spaceId),
       isNull(arkChannelCategories.deletedAt),
@@ -73,7 +70,7 @@ export const channelsRouter = createTRPCRouter({
   byId: baseProcedure.input(channelLookupSchema).query(async ({ ctx, input }) => {
     let channelId = input.id
     if (!uuidInput.safeParse(channelId).success) {
-      const root = await getPublicSpace()
+      const root = await ctx.auth.publicSpace()
       const [channel] = root
         ? await ctx.db.select({ id: arkChannels.id }).from(arkChannels).where(and(
             eq(arkChannels.spaceId, root.id),
@@ -84,7 +81,7 @@ export const channelsRouter = createTRPCRouter({
       channelId = channel?.id ?? channelId
     }
 
-    const access = await canReadChannel(channelId, ctx.session)
+    const access = await ctx.auth.canReadChannel(channelId)
     if (!access.channel)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Channel not found' })
     if (!access.allowed)
@@ -92,7 +89,7 @@ export const channelsRouter = createTRPCRouter({
     return access.channel
   }),
   participants: baseProcedure.input(byIdSchema).query(async ({ ctx, input }) => {
-    const { channel } = await getChannelForAccess(input.id, ctx.session, 'messages.read')
+    const { channel } = await getChannelForAccess(input.id, ctx, 'messages.read')
     const rows = await ctx.db
       .select({
         arkUserId: arkMessages.authorArkUserId,
@@ -138,20 +135,20 @@ export const channelsRouter = createTRPCRouter({
     })).filter((participant: { user: unknown }) => Boolean(participant.user))
   }),
   list: baseProcedure.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
-    await requireSpaceAccess(input.spaceId, ctx.session, 'channels.read')
+    await requireSpaceAccess(input.spaceId, ctx, 'channels.read')
     const rows = await ctx.db.select().from(arkChannels).where(eq(arkChannels.spaceId, input.spaceId)).orderBy(arkChannels.position, arkChannels.createdAt)
     const readable = []
     for (const channel of rows) {
-      const access = await canReadChannel(channel.id, ctx.session)
+      const access = await ctx.auth.canReadChannel(channel.id)
       if (access.allowed)
         readable.push(channel)
     }
     return readable
   }),
   create: protectedProcedure.input(channelCreateSchema).mutation(async ({ ctx, input }) => {
-    const access = await requireSpaceAccess(input.spaceId, ctx.session, 'channels.create')
+    const access = await requireSpaceAccess(input.spaceId, ctx, 'channels.create')
     await requireVisibleArkUsers(ctx, input.memberArkUserIds)
-    const arkUser = access.arkUser ?? await currentArkUser(ctx.session)
+    const arkUser = access.arkUser ?? await ctx.auth.arkUser()
     let categoryId = input.categoryId
     if (categoryId) {
       const [category] = await ctx.db.select().from(arkChannelCategories).where(and(
@@ -193,7 +190,7 @@ export const channelsRouter = createTRPCRouter({
     return channel
   }),
   upsertDm: protectedProcedure.input(dmUpsertSchema).mutation(async ({ ctx, input }) => {
-    const me = await currentArkUser(ctx.session)
+    const me = await ctx.auth.arkUser()
     if (!me)
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
     const dmSpace = await getDmSpace()
@@ -230,7 +227,7 @@ export const channelsRouter = createTRPCRouter({
     if (!message)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' })
 
-    const { access, channel: parentChannel } = await getChannelForAccess(message.channelId, ctx.session, 'messages.create')
+    const { access, channel: parentChannel } = await getChannelForAccess(message.channelId, ctx, 'messages.create')
     if (!access.arkUser)
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
 
@@ -268,7 +265,7 @@ export const channelsRouter = createTRPCRouter({
 
 export const messagesRouter = createTRPCRouter({
   latest: baseProcedure.input(messagesLatestSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx.session, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     const rows = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.channelId, input.channelId),
       isNull(arkMessages.deletedAt),
@@ -281,7 +278,7 @@ export const messagesRouter = createTRPCRouter({
     })
   }),
   before: baseProcedure.input(messagesBeforeSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx.session, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     const cursorDate = parseCursorDate(input.cursor)
     const rows = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.channelId, input.channelId),
@@ -296,7 +293,7 @@ export const messagesRouter = createTRPCRouter({
     })
   }),
   after: baseProcedure.input(messagesAfterSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx.session, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     const cursorDate = parseCursorDate(input.cursor)
     const rows = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.channelId, input.channelId),
@@ -311,7 +308,7 @@ export const messagesRouter = createTRPCRouter({
     })
   }),
   around: baseProcedure.input(messagesAroundSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx.session, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     const [target] = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.id, input.messageId),
       eq(arkMessages.channelId, input.channelId),
@@ -348,7 +345,7 @@ export const messagesRouter = createTRPCRouter({
     })
   }),
   pinned: baseProcedure.input(messagesPinnedSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx.session, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     const cursorDate = input.cursor ? parseCursorDate(input.cursor) : null
     const rows = await ctx.db.select({ message: arkMessages, pin: arkMessagePins }).from(arkMessagePins).innerJoin(
       arkMessages,
@@ -377,13 +374,13 @@ export const messagesRouter = createTRPCRouter({
     }
   }),
   list: baseProcedure.input(messagesListSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx.session, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     const rows = await ctx.db.select().from(arkMessages).where(eq(arkMessages.channelId, input.channelId)).orderBy(desc(arkMessages.createdAt)).limit(input.limit)
     return withMessageDetails(ctx.db, rows, access.arkUser?.id)
   }),
   create: protectedProcedure.input(messageCreateSchema).mutation(async ({ ctx, input }) => {
-    const { channel } = await getChannelForAccess(input.channelId, ctx.session, 'messages.create')
-    const arkUser = await currentArkUser(ctx.session)
+    const { access, channel } = await getChannelForAccess(input.channelId, ctx, 'messages.create')
+    const arkUser = access.arkUser ?? await ctx.auth.arkUser()
     let rootMessageId: string | null = null
     let messageRelation: { relationType: 'forum_parent' | 'reply_quote', targetId: string, targetType: 'message' } | null = null
 
@@ -463,7 +460,7 @@ export const messagesRouter = createTRPCRouter({
     const [message] = await ctx.db.select().from(arkMessages).where(eq(arkMessages.id, input.messageId)).limit(1)
     if (!message)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' })
-    const { access } = await getChannelForAccess(message.channelId, ctx.session, 'messages.read')
+    const { access } = await getChannelForAccess(message.channelId, ctx, 'messages.read')
     if (!access.arkUser)
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
     const [existing] = await ctx.db.select().from(arkMessageReactions).where(and(
@@ -499,7 +496,7 @@ export const messagesRouter = createTRPCRouter({
     const [message] = await ctx.db.select().from(arkMessages).where(eq(arkMessages.id, input.messageId)).limit(1)
     if (!message)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' })
-    const { access, channel } = await getChannelForAccess(message.channelId, ctx.session, 'messages.manage')
+    const { access, channel } = await getChannelForAccess(message.channelId, ctx, 'messages.manage')
     const [pin] = await ctx.db.insert(arkMessagePins).values({
       channelId: channel.id,
       messageId: message.id,
@@ -523,7 +520,7 @@ export const messagesRouter = createTRPCRouter({
     const [message] = await ctx.db.select().from(arkMessages).where(eq(arkMessages.id, input.messageId)).limit(1)
     if (!message)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' })
-    await getChannelForAccess(message.channelId, ctx.session, 'messages.manage')
+    await getChannelForAccess(message.channelId, ctx, 'messages.manage')
     const [relation] = await ctx.db.insert(arkMessageRelations).values(input).returning()
     if (relation) {
       publishChatEvent({
@@ -535,7 +532,7 @@ export const messagesRouter = createTRPCRouter({
     return relation
   }),
   markRead: protectedProcedure.input(z.object({ channelId: z.uuid(), messageId: z.uuid().optional() })).mutation(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx.session, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     if (!access.arkUser)
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
     const [state] = await ctx.db.insert(arkUserChannelStates).values({
@@ -558,7 +555,7 @@ export const messagesRouter = createTRPCRouter({
     return state
   }),
   state: protectedProcedure.input(z.object({ channelId: z.uuid() })).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx.session, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     if (!access.arkUser)
       return null
     const [state] = await ctx.db.select().from(arkUserChannelStates).where(and(

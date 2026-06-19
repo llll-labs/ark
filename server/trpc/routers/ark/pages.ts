@@ -14,18 +14,18 @@ import {
 
 export const pagesRouter = createTRPCRouter({
   list: baseProcedure.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
-    await requireSpaceAccess(input.spaceId, ctx.session, 'pages.read')
+    await requireSpaceAccess(input.spaceId, ctx, 'pages.read')
     return ctx.db.select().from(arkPages).where(eq(arkPages.spaceId, input.spaceId)).orderBy(arkPages.position, arkPages.createdAt)
   }),
   byId: baseProcedure.input(byIdSchema).query(async ({ ctx, input }) => {
     const [page] = await ctx.db.select().from(arkPages).where(eq(arkPages.id, input.id)).limit(1)
     if (!page)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Page not found' })
-    await requireSpaceAccess(page.spaceId, ctx.session, 'pages.read')
+    await requireSpaceAccess(page.spaceId, ctx, 'pages.read')
     return page
   }),
   create: protectedProcedure.input(pageCreateSchema).mutation(async ({ ctx, input }) => {
-    await requireSpaceAccess(input.spaceId, ctx.session, 'pages.manage')
+    await requireSpaceAccess(input.spaceId, ctx, 'pages.manage')
     const [page] = await ctx.db.insert(arkPages).values({
       componentName: input.componentName,
       configJson: input.configJson,
@@ -45,7 +45,7 @@ export const pagesRouter = createTRPCRouter({
     const [page] = await ctx.db.select().from(arkPages).where(eq(arkPages.id, input.id)).limit(1)
     if (!page)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Page not found' })
-    await requireSpaceAccess(page.spaceId, ctx.session, 'pages.manage')
+    await requireSpaceAccess(page.spaceId, ctx, 'pages.manage')
     const [updated] = await ctx.db.update(arkPages).set({
       componentName: input.componentName,
       configJson: input.configJson,

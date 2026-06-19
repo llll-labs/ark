@@ -2,6 +2,7 @@ import type {
   arkMarketJobs,
 } from '../../../../db/schema'
 import type { ArkCapability, ArkCapabilityLike } from '../../../../db/zod'
+import type { RequestAuthContext } from '../../../utils/authorization'
 import { TRPCError } from '@trpc/server'
 import { and, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm'
 import { z } from 'zod/v4'
@@ -32,6 +33,16 @@ import {
   getEffectiveCapabilities,
   getPublicSpace,
 } from '../../../utils/authorization'
+
+type AuthCapableContext = { auth?: RequestAuthContext, db: any, session: any }
+
+function resolveSession(subject: any) {
+  return subject?.session ?? subject
+}
+
+function resolveRequestAuth(subject: any) {
+  return subject?.auth as RequestAuthContext | undefined
+}
 
 // Re-export the shared surface so domain router files import everything from
 // `./shared` instead of reaching back across the tree for tables, zod schemas,
@@ -350,20 +361,23 @@ export function requireCapability(capabilities: string[], capability: ArkCapabil
   }
 }
 
-export async function requireSpaceAccess(spaceId: string, session: any, capability: ArkCapabilityLike) {
-  const access = await getEffectiveCapabilities(spaceId, session)
+export async function requireSpaceAccess(spaceId: string, sessionOrCtx: any, capability: ArkCapabilityLike) {
+  const requestAuth = resolveRequestAuth(sessionOrCtx)
+  const access = requestAuth
+    ? await requestAuth.capabilitiesFor(spaceId)
+    : await getEffectiveCapabilities(spaceId, resolveSession(sessionOrCtx))
   requireCapability(access.capabilities, capability)
   return access
 }
 
-export async function visibleArkUserIds(ctx: { db: any, session: any }) {
-  const arkUser = await currentArkUser(ctx.session)
+export async function visibleArkUserIds(ctx: AuthCapableContext) {
+  const arkUser = ctx.auth ? await ctx.auth.arkUser() : await currentArkUser(ctx.session)
   if (!arkUser)
     return []
 
-  const root = await getPublicSpace()
+  const root = ctx.auth ? await ctx.auth.publicSpace() : await getPublicSpace()
   if (root) {
-    const access = await getEffectiveCapabilities(root.id, ctx.session)
+    const access = ctx.auth ? await ctx.auth.capabilitiesFor(root.id) : await getEffectiveCapabilities(root.id, ctx.session)
     if (access.capabilities.includes('members.manage'))
       return null
   }
@@ -408,7 +422,7 @@ export async function visibleArkUserIds(ctx: { db: any, session: any }) {
   return Array.from(visible)
 }
 
-export async function requireVisibleArkUsers(ctx: { db: any, session: any }, arkUserIds: string[]) {
+export async function requireVisibleArkUsers(ctx: AuthCapableContext, arkUserIds: string[]) {
   const uniqueIds = Array.from(new Set(arkUserIds))
   if (!uniqueIds.length)
     return
@@ -437,8 +451,11 @@ export const roleCreateSchema = z.object({
   scopeType: z.enum(['global', 'space']).default('global'),
 })
 
-export async function currentArkUserOrThrow(session: any) {
-  const arkUser = await currentArkUser(session)
+export async function currentArkUserOrThrow(sessionOrCtx: any) {
+  const requestAuth = resolveRequestAuth(sessionOrCtx)
+  const arkUser = requestAuth
+    ? await requestAuth.arkUser()
+    : await currentArkUser(resolveSession(sessionOrCtx))
   if (!arkUser) {
     throw new TRPCError({
       code: 'UNAUTHORIZED',
@@ -448,7 +465,7 @@ export async function currentArkUserOrThrow(session: any) {
   return arkUser
 }
 
-export async function marketManageSpaceIds(ctx: { db: any, session: any }, arkUserId: string) {
+export async function marketManageSpaceIds(ctx: AuthCapableContext, arkUserId: string) {
   const activeMemberships = await ctx.db.select().from(arkMemberships).where(and(
     eq(arkMemberships.arkUserId, arkUserId),
     eq(arkMemberships.scopeType, 'space'),
@@ -456,22 +473,28 @@ export async function marketManageSpaceIds(ctx: { db: any, session: any }, arkUs
   ))
   const ids: string[] = []
   for (const membership of activeMemberships) {
-    const access = await getEffectiveCapabilities(membership.scopeId, ctx.session)
+    const access = ctx.auth
+      ? await ctx.auth.capabilitiesFor(membership.scopeId)
+      : await getEffectiveCapabilities(membership.scopeId, ctx.session)
     if (access.capabilities.includes('market.jobs.manage'))
       ids.push(membership.scopeId)
   }
   return Array.from(new Set(ids))
 }
 
-export async function requireStoreManage(ctx: { db: any, session: any }, store: MarketStoreRow) {
-  const arkUser = await currentArkUserOrThrow(ctx.session)
-  await requireSpaceAccess(store.ownerSpaceId, ctx.session, 'market.jobs.manage')
+export async function requireStoreManage(ctx: AuthCapableContext, store: MarketStoreRow) {
+  const arkUser = await currentArkUserOrThrow(ctx)
+  if (!arkUser)
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Sign in to manage market data.' })
+  await requireSpaceAccess(store.ownerSpaceId, ctx, 'market.jobs.manage')
   return { arkUser }
 }
 
-export async function requireStoreOwnerInput(ctx: { db: any, session: any }, input: { ownerSpaceId: string }) {
-  const arkUser = await currentArkUserOrThrow(ctx.session)
-  await requireSpaceAccess(input.ownerSpaceId, ctx.session, 'market.jobs.manage')
+export async function requireStoreOwnerInput(ctx: AuthCapableContext, input: { ownerSpaceId: string }) {
+  const arkUser = await currentArkUserOrThrow(ctx)
+  if (!arkUser)
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Sign in to manage market data.' })
+  await requireSpaceAccess(input.ownerSpaceId, ctx, 'market.jobs.manage')
   return { ownerSpaceId: input.ownerSpaceId, arkUser }
 }
 
@@ -589,8 +612,11 @@ export async function replaceJobTargets(ctx: { db: any }, jobId: string, input: 
   }
 }
 
-export async function getChannelForAccess(channelId: string, session: any, capability: ArkCapabilityLike) {
-  const access = await canReadChannel(channelId, session)
+export async function getChannelForAccess(channelId: string, sessionOrCtx: any, capability: ArkCapabilityLike) {
+  const requestAuth = resolveRequestAuth(sessionOrCtx)
+  const access = requestAuth
+    ? await requestAuth.canReadChannel(channelId)
+    : await canReadChannel(channelId, resolveSession(sessionOrCtx))
   if (!access.channel) {
     throw new TRPCError({
       code: 'NOT_FOUND',

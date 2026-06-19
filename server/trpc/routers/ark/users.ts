@@ -3,7 +3,6 @@ import {
   arkUsers,
   arkAuthAccounts,
   createTRPCRouter,
-  currentArkUser,
   emptyListSchema,
   eq,
   arkFiles,
@@ -53,7 +52,7 @@ export const usersRouter = createTRPCRouter({
     return rows
   }),
   settings: protectedProcedure.input(emptyListSchema).query(async ({ ctx }) => {
-    const arkUser = await currentArkUser(ctx.session)
+    const arkUser = await ctx.auth.arkUser()
     if (!arkUser)
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
     const [settings] = await ctx.db.select().from(arkUserSettings).where(eq(arkUserSettings.arkUserId, arkUser.id)).limit(1)
@@ -67,7 +66,7 @@ export const usersRouter = createTRPCRouter({
     }
   }),
   updateProfile: protectedProcedure.input(userProfileUpdateSchema).mutation(async ({ ctx, input }) => {
-    const arkUser = await currentArkUser(ctx.session)
+    const arkUser = await ctx.auth.arkUser()
     if (!arkUser)
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
 
@@ -88,7 +87,7 @@ export const usersRouter = createTRPCRouter({
     return updated ?? null
   }),
   updateSettings: protectedProcedure.input(userSettingsUpdateSchema).mutation(async ({ ctx, input }) => {
-    const arkUser = await currentArkUser(ctx.session)
+    const arkUser = await ctx.auth.arkUser()
     if (!arkUser)
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
     const [settings] = await ctx.db.insert(arkUserSettings).values({

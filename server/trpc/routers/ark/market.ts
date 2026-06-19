@@ -6,13 +6,10 @@ import {
   byIdSchema,
   arkChannels,
   createTRPCRouter,
-  currentArkUser,
   currentArkUserOrThrow,
   desc,
   emptyListSchema,
   eq,
-  getEffectiveCapabilities,
-  getPublicSpace,
   inArray,
   isNull,
   arkMarketCategories,
@@ -48,10 +45,10 @@ import {
 
 export const marketRouter = createTRPCRouter({
   options: baseProcedure.input(emptyListSchema).query(async ({ ctx }) => {
-    const root = await getPublicSpace()
+    const root = await ctx.auth.publicSpace()
     if (!root)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
-    await requireSpaceAccess(root.id, ctx.session, 'market.access')
+    await requireSpaceAccess(root.id, ctx, 'market.access')
     const sourceRows = await ctx.db
       .selectDistinct({ source: arkMarketJobs.source })
       .from(arkMarketJobs)
@@ -71,11 +68,10 @@ export const marketRouter = createTRPCRouter({
   }),
   stores: createTRPCRouter({
     list: baseProcedure.input(marketStoreListSchema).query(async ({ ctx, input }) => {
-      const root = await getPublicSpace()
+      const root = await ctx.auth.publicSpace()
       if (!root)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
-      await requireSpaceAccess(root.id, ctx.session, 'market.access')
-      const rootAccess = await getEffectiveCapabilities(root.id, ctx.session)
+      const rootAccess = await requireSpaceAccess(root.id, ctx, 'market.access')
       const filters = [
         eq(arkMarketStores.status, input.status && rootAccess.capabilities.includes('market.jobs.manage') ? input.status : 'active'),
       ]
@@ -85,7 +81,7 @@ export const marketRouter = createTRPCRouter({
       return withStoreDetails(ctx, rows)
     }),
     mine: protectedProcedure.input(emptyListSchema).query(async ({ ctx }) => {
-      const arkUser = await currentArkUserOrThrow(ctx.session)
+      const arkUser = await currentArkUserOrThrow(ctx)
       const spaceIds = await marketManageSpaceIds(ctx, arkUser.id)
       const rows = spaceIds.length
         ? await ctx.db.select().from(arkMarketStores).where(and(
@@ -143,11 +139,11 @@ export const marketRouter = createTRPCRouter({
       id: z.uuid(),
       reviewNote: z.string().max(2000).optional(),
     })).mutation(async ({ ctx, input }) => {
-      const root = await getPublicSpace()
+      const root = await ctx.auth.publicSpace()
       if (!root)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
-      await requireSpaceAccess(root.id, ctx.session, 'market.jobs.manage')
-      const reviewer = await currentArkUserOrThrow(ctx.session)
+      await requireSpaceAccess(root.id, ctx, 'market.jobs.manage')
+      const reviewer = await currentArkUserOrThrow(ctx)
       const [store] = await ctx.db.select().from(arkMarketStores).where(eq(arkMarketStores.id, input.id)).limit(1)
       if (!store)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Store not found' })
@@ -212,10 +208,10 @@ export const marketRouter = createTRPCRouter({
       status: z.string().max(40).optional(),
       tagId: z.string().uuid().optional(),
     }).default({ admin: false, limit: 10, offset: 0, sort: 'newest' })).query(async ({ ctx, input }) => {
-      const root = await getPublicSpace()
+      const root = await ctx.auth.publicSpace()
       if (!root)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
-      const access = await requireSpaceAccess(root.id, ctx.session, 'market.access')
+      const access = await requireSpaceAccess(root.id, ctx, 'market.access')
       const canManage = access.capabilities.includes('market.jobs.manage')
       const adminView = canManage && input.admin
 
@@ -275,7 +271,7 @@ export const marketRouter = createTRPCRouter({
       const [job] = await ctx.db.select().from(arkMarketJobs).where(eq(arkMarketJobs.id, input.id)).limit(1)
       if (!job)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
-      const access = await requireSpaceAccess(job.spaceId, ctx.session, 'market.access')
+      const access = await requireSpaceAccess(job.spaceId, ctx, 'market.access')
       const canManage = access.capabilities.includes('market.jobs.manage')
       if (!canManage && (job.curationStatus === 'hidden' || job.status === 'archived')) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
@@ -287,13 +283,13 @@ export const marketRouter = createTRPCRouter({
     }),
     upsert: protectedProcedure.input(marketJobUpsertSchema).mutation(async ({ ctx, input }) => {
       const { categoryIds, tagIds, ...jobInput } = input
-      const root = input.spaceId ? null : await getPublicSpace()
+      const root = input.spaceId ? null : await ctx.auth.publicSpace()
       const spaceId = input.spaceId ?? root?.id
       if (!spaceId)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Target space not found' })
-      await requireSpaceAccess(spaceId, ctx.session, 'market.access')
+      await requireSpaceAccess(spaceId, ctx, 'market.access')
       const imported = Boolean(input.source || input.externalId)
-      const access = await requireSpaceAccess(spaceId, ctx.session, imported ? 'market.jobs.import' : 'market.jobs.manage')
+      const access = await requireSpaceAccess(spaceId, ctx, imported ? 'market.jobs.import' : 'market.jobs.manage')
       const existing = input.source && input.externalId
         ? (await ctx.db.select().from(arkMarketJobs).where(and(
             eq(arkMarketJobs.source, input.source),
@@ -329,8 +325,8 @@ export const marketRouter = createTRPCRouter({
       const [job] = await ctx.db.select().from(arkMarketJobs).where(eq(arkMarketJobs.id, input.id)).limit(1)
       if (!job)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
-      await requireSpaceAccess(job.spaceId, ctx.session, 'market.access')
-      await requireSpaceAccess(job.spaceId, ctx.session, 'market.jobs.manage')
+      await requireSpaceAccess(job.spaceId, ctx, 'market.access')
+      await requireSpaceAccess(job.spaceId, ctx, 'market.jobs.manage')
       const now = new Date()
       const nextCuration = input.action === 'approve' ? 'approved' as const : 'hidden' as const
       const nextValues = input.action === 'archive'
@@ -356,8 +352,8 @@ export const marketRouter = createTRPCRouter({
       const [job] = await ctx.db.select().from(arkMarketJobs).where(eq(arkMarketJobs.id, input.id)).limit(1)
       if (!job)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
-      const access = await requireSpaceAccess(job.spaceId, ctx.session, 'market.access')
-      await requireSpaceAccess(job.spaceId, ctx.session, 'market.jobs.read')
+      const access = await requireSpaceAccess(job.spaceId, ctx, 'market.access')
+      await requireSpaceAccess(job.spaceId, ctx, 'market.jobs.read')
       if (!access.capabilities.includes('market.jobs.manage') && (job.curationStatus === 'hidden' || job.status === 'archived')) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
       }
@@ -365,7 +361,7 @@ export const marketRouter = createTRPCRouter({
         const [channel] = await ctx.db.select().from(arkChannels).where(eq(arkChannels.id, job.discussionChannelId)).limit(1)
         return { channel, job }
       }
-      const arkUser = await currentArkUser(ctx.session)
+      const arkUser = await ctx.auth.arkUser()
       const [channel] = await ctx.db.insert(arkChannels).values({
         createdByArkUserId: arkUser?.id,
         kind: 'job_discussion',

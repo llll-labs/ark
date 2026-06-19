@@ -1,13 +1,19 @@
 import type { H3Event } from 'h3'
 import { initTRPC, TRPCError } from '@trpc/server'
-import { getArkSession } from '../utils/authorization'
+import { bindRequestAuth, createRequestAuth } from '../utils/authorization'
 import { useDatabase } from '../utils/db'
 
 export async function createTRPCContext(event: H3Event) {
+  const db = useDatabase()
+  const auth = createRequestAuth(event, db)
+  const session = await auth.session()
+  bindRequestAuth(session, auth)
+
   return {
-    db: useDatabase(),
+    auth,
+    db,
     event,
-    session: await getArkSession(event),
+    session,
   }
 }
 

@@ -6,12 +6,9 @@ import {
   arkChannelMembers,
   arkChannels,
   createTRPCRouter,
-  currentArkUser,
   desc,
   emptyListSchema,
   eq,
-  getEffectiveCapabilities,
-  getPublicSpace,
   grantCreateSchema,
   arkGrants,
   inArray,
@@ -38,7 +35,7 @@ export const spacesRouter = createTRPCRouter({
         continue
       if (input.parentSpaceId !== undefined && space.parentSpaceId !== input.parentSpaceId)
         continue
-      const access = await getEffectiveCapabilities(space.id, ctx.session)
+      const access = await ctx.auth.capabilitiesFor(space.id)
       if (access.capabilities.includes('spaces.read'))
         filtered.push(space)
     }
@@ -48,17 +45,17 @@ export const spacesRouter = createTRPCRouter({
     const [space] = await ctx.db.select().from(arkSpaces).where(eq(arkSpaces.id, input.id)).limit(1)
     if (!space)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Space not found' })
-    await requireSpaceAccess(space.id, ctx.session, 'spaces.read')
+    await requireSpaceAccess(space.id, ctx, 'spaces.read')
     return space
   }),
   create: protectedProcedure.input(spaceCreateSchema).mutation(async ({ ctx, input }) => {
     const parent = input.parentSpaceId
       ? (await ctx.db.select().from(arkSpaces).where(eq(arkSpaces.id, input.parentSpaceId)).limit(1))[0]
-      : await getPublicSpace()
+      : await ctx.auth.publicSpace()
     if (!parent)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Parent space not found' })
-    await requireSpaceAccess(parent.id, ctx.session, 'spaces.manage')
-    const arkUser = await currentArkUser(ctx.session)
+    await requireSpaceAccess(parent.id, ctx, 'spaces.manage')
+    const arkUser = await ctx.auth.arkUser()
     const [space] = await ctx.db.insert(arkSpaces).values({
       description: input.description,
       inheritAccess: input.inheritAccess,
@@ -72,20 +69,20 @@ export const spacesRouter = createTRPCRouter({
     return space
   }),
   effectiveCapabilities: baseProcedure.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
-    return getEffectiveCapabilities(input.spaceId, ctx.session)
+    return ctx.auth.capabilitiesFor(input.spaceId)
   }),
 })
 
 export const membersRouter = createTRPCRouter({
   list: baseProcedure.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
-    await requireSpaceAccess(input.spaceId, ctx.session, 'members.read')
+    await requireSpaceAccess(input.spaceId, ctx, 'members.read')
     return ctx.db.select().from(arkMemberships).where(and(
       eq(arkMemberships.scopeType, 'space'),
       eq(arkMemberships.scopeId, input.spaceId),
     ))
   }),
   upsert: protectedProcedure.input(memberUpsertSchema).mutation(async ({ ctx, input }) => {
-    await requireSpaceAccess(input.scopeId, ctx.session, 'members.manage')
+    await requireSpaceAccess(input.scopeId, ctx, 'members.manage')
     const [row] = await ctx.db.insert(arkMemberships).values({
       arkUserId: input.arkUserId,
       joinedAt: new Date(),
@@ -129,21 +126,21 @@ export const membersRouter = createTRPCRouter({
 
 export const rolesRouter = createTRPCRouter({
   list: baseProcedure.input(emptyListSchema).query(async ({ ctx }) => {
-    const root = await getPublicSpace()
+    const root = await ctx.auth.publicSpace()
     if (!root)
       return []
-    await requireSpaceAccess(root.id, ctx.session, 'roles.read')
+    await requireSpaceAccess(root.id, ctx, 'roles.read')
     return ctx.db.select().from(arkRoles).orderBy(desc(arkRoles.rank))
   }),
   create: protectedProcedure.input(roleCreateSchema).mutation(async ({ ctx, input }) => {
-    const root = await getPublicSpace()
+    const root = await ctx.auth.publicSpace()
     if (!root)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
     if (input.scopeType === 'space' && input.scopeId) {
-      await requireSpaceAccess(input.scopeId, ctx.session, 'roles.manage')
+      await requireSpaceAccess(input.scopeId, ctx, 'roles.manage')
     }
     else {
-      await requireSpaceAccess(root.id, ctx.session, 'roles.manage')
+      await requireSpaceAccess(root.id, ctx, 'roles.manage')
     }
     const [role] = await ctx.db.insert(arkRoles).values({
       description: input.description ?? null,
@@ -159,10 +156,10 @@ export const rolesRouter = createTRPCRouter({
 
 export const permissionsRouter = createTRPCRouter({
   list: baseProcedure.input(emptyListSchema).query(async ({ ctx }) => {
-    const root = await getPublicSpace()
+    const root = await ctx.auth.publicSpace()
     if (!root)
       return []
-    await requireSpaceAccess(root.id, ctx.session, 'roles.read')
+    await requireSpaceAccess(root.id, ctx, 'roles.read')
     return ctx.db.select().from(arkGrants)
   }),
   grant: protectedProcedure.input(grantCreateSchema).mutation(async ({ ctx, input }) => {
@@ -171,13 +168,13 @@ export const permissionsRouter = createTRPCRouter({
     if (!isKnownArkCapability(input.action))
       throw new TRPCError({ code: 'BAD_REQUEST', message: `Unknown capability: ${input.action}` })
     if (input.scopeType === 'space' && input.scopeId) {
-      await requireSpaceAccess(input.scopeId, ctx.session, 'roles.manage')
+      await requireSpaceAccess(input.scopeId, ctx, 'roles.manage')
     }
     else {
-      const root = await getPublicSpace()
+      const root = await ctx.auth.publicSpace()
       if (!root)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
-      await requireSpaceAccess(root.id, ctx.session, 'roles.manage')
+      await requireSpaceAccess(root.id, ctx, 'roles.manage')
     }
     const [row] = await ctx.db.insert(arkGrants).values({
       action: input.action,

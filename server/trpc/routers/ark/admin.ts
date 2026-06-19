@@ -134,11 +134,11 @@ function foreignKeysOf(table: any): Record<string, { tableKey: string | null, la
   return out
 }
 
-async function requireAdmin(session: unknown) {
-  const root = await getPublicSpace()
+async function requireAdmin(sessionOrCtx: any) {
+  const root = sessionOrCtx?.auth ? await sessionOrCtx.auth.publicSpace() : await getPublicSpace()
   if (!root)
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
-  await requireSpaceAccess(root.id, session, 'settings.manage')
+  await requireSpaceAccess(root.id, sessionOrCtx, 'settings.manage')
 }
 
 // Coerce form values to the shapes Drizzle expects, dropping unknown/auto columns.
@@ -166,7 +166,7 @@ const tableInput = z.object({ table: z.string().max(64) })
 
 export const adminRouter = createTRPCRouter({
   tables: baseProcedure.query(async ({ ctx }) => {
-    await requireAdmin(ctx.session)
+    await requireAdmin(ctx)
     return [...adminRegistrations().values()].map(serializeTable)
   }),
 
@@ -180,7 +180,7 @@ export const adminRouter = createTRPCRouter({
       filters: z.array(z.object({ column: z.string().max(64), value: z.string().max(200) })).default([]),
     }))
     .query(async ({ ctx, input }) => {
-      await requireAdmin(ctx.session)
+      await requireAdmin(ctx)
       const registration = resolveRegistration(input.table)
       const table = registration.table as any
       const cols = columnsOf(table)
@@ -231,7 +231,7 @@ export const adminRouter = createTRPCRouter({
   options: baseProcedure
     .input(tableInput)
     .query(async ({ ctx, input }) => {
-      await requireAdmin(ctx.session)
+      await requireAdmin(ctx)
       const registration = resolveRegistration(input.table)
       const table = registration.table as any
       const primaryKey = primaryKeyOf(registration)
@@ -251,7 +251,7 @@ export const adminRouter = createTRPCRouter({
   get: baseProcedure
     .input(tableInput.extend({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      await requireAdmin(ctx.session)
+      await requireAdmin(ctx)
       const registration = resolveRegistration(input.table)
       const table = registration.table as any
       const [row] = await ctx.db.select().from(table).where(eq(table[primaryKeyOf(registration)], input.id)).limit(1)
@@ -261,7 +261,7 @@ export const adminRouter = createTRPCRouter({
   create: baseProcedure
     .input(tableInput.extend({ values: z.record(z.string(), z.unknown()) }))
     .mutation(async ({ ctx, input }) => {
-      await requireAdmin(ctx.session)
+      await requireAdmin(ctx)
       const table = resolveTable(input.table)
       const inserted = await ctx.db.insert(table).values(sanitizeValues(columnsOf(table), input.values)).returning() as any[]
       return inserted[0]
@@ -270,7 +270,7 @@ export const adminRouter = createTRPCRouter({
   update: baseProcedure
     .input(tableInput.extend({ id: z.string(), values: z.record(z.string(), z.unknown()) }))
     .mutation(async ({ ctx, input }) => {
-      await requireAdmin(ctx.session)
+      await requireAdmin(ctx)
       const registration = resolveRegistration(input.table)
       const table = registration.table as any
       const cols = columnsOf(table)
@@ -287,7 +287,7 @@ export const adminRouter = createTRPCRouter({
   remove: baseProcedure
     .input(tableInput.extend({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      await requireAdmin(ctx.session)
+      await requireAdmin(ctx)
       const registration = resolveRegistration(input.table)
       const table = registration.table as any
       const cols = columnsOf(table)
@@ -300,8 +300,8 @@ export const adminRouter = createTRPCRouter({
 
   // Permissions matrix: roles × capabilities, backed by ark_grants on the root space.
   permissions: baseProcedure.query(async ({ ctx }) => {
-    await requireAdmin(ctx.session)
-    const root = await getPublicSpace()
+    await requireAdmin(ctx)
+    const root = await ctx.auth.publicSpace()
     if (!root)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
     const roleRows = await ctx.db
@@ -332,8 +332,8 @@ export const adminRouter = createTRPCRouter({
   setGrant: baseProcedure
     .input(z.object({ roleId: z.string(), capability: z.string().max(80), allow: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      await requireAdmin(ctx.session)
-      const root = await getPublicSpace()
+      await requireAdmin(ctx)
+      const root = await ctx.auth.publicSpace()
       if (!root)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
       if (!isKnownArkCapability(input.capability))

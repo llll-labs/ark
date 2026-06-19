@@ -7,11 +7,8 @@ import { settingsRouter } from './ark/settings'
 import {
   baseProcedure,
   createTRPCRouter,
-  currentArkUser,
   defaultArkIdentity,
   eq,
-  getEffectiveCapabilities,
-  getPublicSpace,
   loadArkUserExtension,
   arkMemberships,
   sql,
@@ -40,9 +37,11 @@ export const arkRouter = createTRPCRouter({
     }
 
     const ark = defaultArkIdentity()
-    const arkUser = await currentArkUser(ctx.session)
-    const root = await getPublicSpace()
-    const capabilityAccess = root ? await getEffectiveCapabilities(root.id, ctx.session) : { capabilities: [] as string[] }
+    const [arkUser, root] = await Promise.all([
+      ctx.auth.arkUser(),
+      ctx.auth.publicSpace(),
+    ])
+    const capabilityAccess = root ? await ctx.auth.capabilitiesFor(root.id) : { capabilities: [] as string[] }
     const rows = arkUser
       ? await ctx.db.select().from(arkMemberships).where(eq(arkMemberships.arkUserId, arkUser.id))
       : []

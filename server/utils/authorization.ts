@@ -25,8 +25,15 @@ import { syncArkUserProviderAvatar } from './provider-avatar'
 
 type Session = Awaited<ReturnType<typeof getArkSession>>
 type ChannelRow = typeof arkChannels.$inferSelect
-type EffectiveCapabilities = Awaited<ReturnType<typeof getEffectiveCapabilities>>
-type ChannelAccessResult
+type ArkUserRow = typeof arkUsers.$inferSelect
+type SpaceRow = typeof arkSpaces.$inferSelect
+export interface EffectiveCapabilities {
+  arkUser?: ArkUserRow | null
+  capabilities: string[]
+  spaceIds: string[]
+  spaces: SpaceRow[]
+}
+export type ChannelAccessResult
   = | { access: EffectiveCapabilities, allowed: true, channel: ChannelRow }
     | { access?: EffectiveCapabilities, allowed: false, channel: ChannelRow | null, reason: string }
 interface AuthUser {
@@ -79,7 +86,40 @@ type DefaultArkIdentity = ReturnType<typeof defaultArkIdentity>
 let defaultArkEnsured = false
 let defaultArkEnsurePromise: Promise<DefaultArkIdentity> | null = null
 
-async function syncProviderAvatarSafely(arkUser: typeof arkUsers.$inferSelect, authUser: AuthUser) {
+interface AuthLookupOptions {
+  arkUser?: ArkUserRow | null
+  bypassRequestAuth?: boolean
+  capabilitiesFor?: (spaceId: string) => Promise<EffectiveCapabilities>
+  db?: ReturnType<typeof useDatabase>
+}
+
+export interface RequestAuthContext {
+  arkUser: () => Promise<ArkUserRow | null>
+  canReadChannel: (channelId: string) => Promise<ChannelAccessResult>
+  capabilitiesFor: (spaceId: string) => Promise<EffectiveCapabilities>
+  publicSpace: () => Promise<SpaceRow | null>
+  requireSpace: (spaceId: string, capability: ArkCapabilityLike) => Promise<EffectiveCapabilities>
+  session: () => Promise<Session>
+}
+
+const requestAuthBySession = new WeakMap<object, RequestAuthContext>()
+
+function sessionObject(session: Session) {
+  return session && typeof session === 'object' ? session as object : null
+}
+
+export function bindRequestAuth(session: Session, requestAuth: RequestAuthContext) {
+  const key = sessionObject(session)
+  if (key)
+    requestAuthBySession.set(key, requestAuth)
+}
+
+function requestAuthForSession(session: Session) {
+  const key = sessionObject(session)
+  return key ? requestAuthBySession.get(key) ?? null : null
+}
+
+async function syncProviderAvatarSafely(arkUser: ArkUserRow, authUser: AuthUser) {
   try {
     return await syncArkUserProviderAvatar(arkUser, authUser)
   }
@@ -542,6 +582,67 @@ export async function requireAuthUser(event: H3Event) {
   return session
 }
 
+export function createRequestAuth(event: H3Event, db: ReturnType<typeof useDatabase> = useDatabase()): RequestAuthContext {
+  let sessionPromise: Promise<Session> | null = null
+  let arkUserPromise: Promise<ArkUserRow | null> | null = null
+  let publicSpacePromise: Promise<SpaceRow | null> | null = null
+  const capabilityPromises = new Map<string, Promise<EffectiveCapabilities>>()
+  const channelAccessPromises = new Map<string, Promise<ChannelAccessResult>>()
+
+  const requestAuth: RequestAuthContext = {
+    session() {
+      sessionPromise ??= getArkSession(event)
+      return sessionPromise
+    },
+    arkUser() {
+      arkUserPromise ??= requestAuth.session().then(session => currentArkUser(session, { bypassRequestAuth: true, db }))
+      return arkUserPromise
+    },
+    publicSpace() {
+      publicSpacePromise ??= getPublicSpace(db)
+      return publicSpacePromise
+    },
+    capabilitiesFor(spaceId: string) {
+      let promise = capabilityPromises.get(spaceId)
+      if (!promise) {
+        promise = Promise.all([requestAuth.session(), requestAuth.arkUser()])
+          .then(([session, arkUser]) => getEffectiveCapabilities(spaceId, session, {
+            arkUser,
+            bypassRequestAuth: true,
+            db,
+          }))
+        capabilityPromises.set(spaceId, promise)
+      }
+      return promise
+    },
+    requireSpace(spaceId: string, capability: ArkCapabilityLike) {
+      return requestAuth.capabilitiesFor(spaceId).then((access) => {
+        if (!access.capabilities.includes(capability)) {
+          throw createError({
+            statusCode: 403,
+            statusMessage: `Missing capability: ${capability}`,
+          })
+        }
+        return access
+      })
+    },
+    canReadChannel(channelId: string) {
+      let promise = channelAccessPromises.get(channelId)
+      if (!promise) {
+        promise = requestAuth.session().then(session => canReadChannel(channelId, session, {
+          bypassRequestAuth: true,
+          capabilitiesFor: requestAuth.capabilitiesFor,
+          db,
+        }))
+        channelAccessPromises.set(channelId, promise)
+      }
+      return promise
+    },
+  }
+
+  return requestAuth
+}
+
 async function ensureDefaultArkUncached() {
   const db = useDatabase()
 
@@ -710,10 +811,16 @@ export async function ensureArkUser(authUser: AuthUser) {
   return syncProviderAvatarSafely(created, authUser)
 }
 
-export async function currentArkUser(session: Session) {
+export async function currentArkUser(session: Session, options: AuthLookupOptions = {}): Promise<ArkUserRow | null> {
   if (!session?.user)
     return null
-  const db = useDatabase()
+  if (!options.bypassRequestAuth) {
+    const requestAuth = requestAuthForSession(session)
+    if (requestAuth)
+      return requestAuth.arkUser()
+  }
+
+  const db = options.db ?? useDatabase()
   const [arkUser] = await db
     .select()
     .from(arkUsers)
@@ -722,8 +829,7 @@ export async function currentArkUser(session: Session) {
   return arkUser ?? null
 }
 
-export async function getPublicSpace() {
-  const db = useDatabase()
+export async function getPublicSpace(db: ReturnType<typeof useDatabase> = useDatabase()): Promise<SpaceRow | null> {
   const [root] = await db.select().from(arkSpaces).where(and(eq(arkSpaces.isDefault, true), isNull(arkSpaces.deletedAt))).limit(1)
   return root ?? null
 }
@@ -732,8 +838,7 @@ export async function getDmSpace() {
   return getPublicSpace()
 }
 
-export async function getSpaceAccessScope(spaceId: string) {
-  const db = useDatabase()
+export async function getSpaceAccessScope(spaceId: string, db: ReturnType<typeof useDatabase> = useDatabase()): Promise<SpaceRow[]> {
   const rows = []
   let currentSpaceId: string | null = spaceId
 
@@ -748,15 +853,23 @@ export async function getSpaceAccessScope(spaceId: string) {
   return rows
 }
 
-export async function getEffectiveCapabilities(spaceId: string, session: Session) {
-  const db = useDatabase()
-  const scope = await getSpaceAccessScope(spaceId)
+export async function getEffectiveCapabilities(spaceId: string, session: Session, options: AuthLookupOptions = {}): Promise<EffectiveCapabilities> {
+  if (!options.bypassRequestAuth) {
+    const requestAuth = requestAuthForSession(session)
+    if (requestAuth)
+      return requestAuth.capabilitiesFor(spaceId)
+  }
+
+  const db = options.db ?? useDatabase()
+  const scope = await getSpaceAccessScope(spaceId, db)
   const spaceIds = scope.map(space => space.id)
   if (scope.length === 0) {
     return { capabilities: [] as string[], spaceIds, spaces: scope }
   }
 
-  const arkUser = await currentArkUser(session)
+  const arkUser = Object.prototype.hasOwnProperty.call(options, 'arkUser')
+    ? options.arkUser ?? null
+    : await currentArkUser(session, { bypassRequestAuth: true, db })
   const activeMemberships = arkUser
     ? await db.select().from(arkMemberships).where(and(
         eq(arkMemberships.arkUserId, arkUser.id),
@@ -817,8 +930,14 @@ export async function getEffectiveCapabilities(spaceId: string, session: Session
   }
 }
 
-export async function canReadChannel(channelId: string, session: Session): Promise<ChannelAccessResult> {
-  const db = useDatabase()
+export async function canReadChannel(channelId: string, session: Session, options: AuthLookupOptions = {}): Promise<ChannelAccessResult> {
+  if (!options.bypassRequestAuth) {
+    const requestAuth = requestAuthForSession(session)
+    if (requestAuth)
+      return requestAuth.canReadChannel(channelId)
+  }
+
+  const db = options.db ?? useDatabase()
   const [channel] = await db.select().from(arkChannels).where(eq(arkChannels.id, channelId)).limit(1)
   if (!channel || channel.deletedAt)
     return { allowed: false, channel: null, reason: 'not_found' }
@@ -826,13 +945,19 @@ export async function canReadChannel(channelId: string, session: Session): Promi
   if (channel.kind === 'thread') {
     if (!channel.threadParentChannelId)
       return { allowed: false, channel, reason: 'thread_parent_missing' }
-    const parentAccess: ChannelAccessResult = await canReadChannel(channel.threadParentChannelId, session)
+    const parentAccess: ChannelAccessResult = await canReadChannel(channel.threadParentChannelId, session, {
+      ...options,
+      bypassRequestAuth: true,
+      db,
+    })
     if (!parentAccess.allowed)
       return { access: parentAccess.access, allowed: false, channel, reason: parentAccess.reason }
     return { allowed: true, access: parentAccess.access, channel }
   }
 
-  const access = await getEffectiveCapabilities(channel.spaceId, session)
+  const access = options.capabilitiesFor
+    ? await options.capabilitiesFor(channel.spaceId)
+    : await getEffectiveCapabilities(channel.spaceId, session, { bypassRequestAuth: true, db })
   if (!access.capabilities.includes('channels.read'))
     return { allowed: false, access, channel, reason: 'missing_capability' }
 
