@@ -73,7 +73,6 @@ export function useArkShell() {
 
   // Base — identity + workspace-wide data. Not watched on navigation.
   const baseQuery = useAsyncData('ark-shell-base', async () => {
-    await auth.check()
     const spaces = await $trpc.ark.spaces.list.query({}).catch(() => [] as ShellSpace[])
     const channelsBySpace = await Promise.all(
       spaces.map(space => $trpc.ark.channels.list.query({ spaceId: space.id }).catch(() => [] as ShellChannel[])),

@@ -4,8 +4,7 @@ definePageMeta({
 })
 
 const auth = useArkAuth()
-await auth.check()
-const me = auth.me.value
+const me = auth.checked.value ? auth.me.value : await auth.check()
 
 if (me?.authenticated)
   await navigateTo('/app/channels/general', { replace: true })

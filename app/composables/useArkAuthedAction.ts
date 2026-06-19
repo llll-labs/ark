@@ -4,7 +4,7 @@ export function useArkAuthedAction() {
   const pendingAction = shallowRef<null | (() => Promise<void> | void)>(null)
 
   async function runAuthed(action: () => Promise<void> | void) {
-    const me = await auth.check()
+    const me = auth.checked.value ? auth.me.value : await auth.check()
     if (me?.authenticated) {
       await action()
       return

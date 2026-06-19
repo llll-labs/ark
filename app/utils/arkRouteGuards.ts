@@ -164,7 +164,7 @@ export async function runArkOnboardingGuard(to: any) {
     return
 
   const auth = useArkAuth()
-  const me = await auth.check()
+  const me = auth.checked.value ? auth.me.value : await auth.check()
   if (!me?.authenticated)
     return
 

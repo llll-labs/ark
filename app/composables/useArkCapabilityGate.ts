@@ -9,7 +9,8 @@ export async function useArkCapabilityGate(capability: ArkCapabilityLike) {
   const route = useRoute()
   const nuxtApp = useNuxtApp()
   const auth = useArkAuth()
-  await auth.check()
+  if (!auth.checked.value)
+    await auth.check()
 
   if (!auth.me.value?.authenticated) {
     const redirect = encodeURIComponent(route.fullPath)

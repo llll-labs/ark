@@ -15,7 +15,7 @@ const props = withDefaults(defineProps<{
 const route = useRoute()
 const auth = useArkAuth()
 const settingsOpen = ref(false)
-await auth.check().catch(() => null)
+await auth.checkSession().catch(() => null)
 const name = computed(() => auth.me.value?.arkUser?.displayName || auth.me.value?.user?.name || '')
 const initials = computed(() => nameInitials(name.value, 'M'))
 const avatarSrc = computed(() => arkAvatarFileUrl(auth.me.value?.arkUser?.avatarFileId))

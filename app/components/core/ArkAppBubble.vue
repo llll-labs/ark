@@ -61,7 +61,7 @@ function closePortal() {
 }
 
 onMounted(async () => {
-  const me = await auth.check().catch(() => null)
+  const me = auth.checked.value ? auth.me.value : await auth.checkSession().catch(() => null)
   if (me?.authenticated)
     roles.value = await $trpc.ark.roles.list.query({}).catch(() => [])
   checkedAuth.value = true
