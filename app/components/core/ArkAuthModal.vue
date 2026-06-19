@@ -62,15 +62,17 @@ function finishAuth() {
           <UIcon name="i-lucide-x" class="size-5" />
         </button>
 
-        <ArkAuthPanel
-          :brand-subtitle="brandSubtitle"
-          :brand-title="brandTitle"
-          :intent-title="intentTitle"
-          :oauth-redirect="route.fullPath"
-          :stats="stats"
-          @authenticated="finishAuth"
-          @navigate="closeForNavigation"
-        />
+        <Suspense>
+          <ArkAuthPanel
+            :brand-subtitle="brandSubtitle"
+            :brand-title="brandTitle"
+            :intent-title="intentTitle"
+            :oauth-redirect="route.fullPath"
+            :stats="stats"
+            @authenticated="finishAuth"
+            @navigate="closeForNavigation"
+          />
+        </Suspense>
 
         <ArkLocaleSelect class="mt-4" />
       </div>
