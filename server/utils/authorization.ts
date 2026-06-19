@@ -824,8 +824,10 @@ export async function ensureArkUser(authUser: AuthUser) {
     .where(eq(arkUsers.authUserId, authUser.id))
     .limit(1)
 
-  if (existing)
+  if (existing) {
+    await ensureArkUserPersonalSpace(existing, db)
     return syncProviderAvatarSafely(existing, authUser)
+  }
 
   let root = await getPublicSpace()
   if (!root && isConfiguredAdminEmail(authUser.email)) {
