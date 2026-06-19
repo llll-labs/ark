@@ -66,7 +66,7 @@ export interface ShellRole {
   rank?: number
 }
 
-export async function useArkShell() {
+export function useArkShell() {
   const { $trpc } = useNuxtApp()
   const route = useRoute()
   const auth = useArkAuth()
@@ -131,8 +131,6 @@ export async function useArkShell() {
     },
     { watch: [routeChannelId] },
   )
-
-  await Promise.all([baseQuery, spaceQuery, participantsQuery])
 
   const pages = computed(() => spaceQuery.data.value?.pages ?? [])
   const members = computed(() => spaceQuery.data.value?.members ?? [])

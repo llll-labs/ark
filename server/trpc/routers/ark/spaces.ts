@@ -9,7 +9,6 @@ import {
   currentArkUser,
   desc,
   emptyListSchema,
-  ensureDefaultArk,
   eq,
   getEffectiveCapabilities,
   getPublicSpace,
@@ -32,7 +31,6 @@ import {
 
 export const spacesRouter = createTRPCRouter({
   list: baseProcedure.input(spaceListSchema).query(async ({ ctx, input }) => {
-    await ensureDefaultArk()
     const rows = await ctx.db.select().from(arkSpaces).orderBy(arkSpaces.createdAt)
     const filtered = []
     for (const space of rows) {
@@ -131,10 +129,9 @@ export const membersRouter = createTRPCRouter({
 
 export const rolesRouter = createTRPCRouter({
   list: baseProcedure.input(emptyListSchema).query(async ({ ctx }) => {
-    await ensureDefaultArk()
     const root = await getPublicSpace()
     if (!root)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
+      return []
     await requireSpaceAccess(root.id, ctx.session, 'roles.read')
     return ctx.db.select().from(arkRoles).orderBy(desc(arkRoles.rank))
   }),
@@ -162,10 +159,9 @@ export const rolesRouter = createTRPCRouter({
 
 export const permissionsRouter = createTRPCRouter({
   list: baseProcedure.input(emptyListSchema).query(async ({ ctx }) => {
-    await ensureDefaultArk()
     const root = await getPublicSpace()
     if (!root)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
+      return []
     await requireSpaceAccess(root.id, ctx.session, 'roles.read')
     return ctx.db.select().from(arkGrants)
   }),

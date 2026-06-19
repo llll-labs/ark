@@ -5,21 +5,24 @@ import type { MaybeRefOrGetter } from 'vue'
  * to the owning job (those channels are not part of normal channel navigation).
  * `jobRedirect` lets each route pick the destination; defaults to `/app/jobs`.
  */
-export async function useChannelRouteGuard(
+export function useChannelRouteGuard(
   channelId: MaybeRefOrGetter<string>,
   options?: { jobRedirect?: (channel: any) => string },
 ) {
   const { $trpc } = useNuxtApp()
   const id = computed(() => toValue(channelId))
-  const { data: channel } = await useAsyncData(
+  const { data: channel } = useAsyncData(
     `ark-channel-route-${id.value}`,
     () => $trpc.ark.channels.byId.query({ id: id.value }),
   )
 
-  if (channel.value?.kind === 'job_discussion') {
-    const target = options?.jobRedirect?.(channel.value) ?? '/app/jobs'
-    await navigateTo(target, { replace: true })
-  }
+  watch(channel, (value) => {
+    if (value?.kind !== 'job_discussion')
+      return
+
+    const target = options?.jobRedirect?.(value) ?? '/app/jobs'
+    void navigateTo(target, { replace: true })
+  }, { immediate: true })
 
   return channel
 }

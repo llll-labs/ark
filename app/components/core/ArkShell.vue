@@ -66,7 +66,7 @@ const {
   selectedSpace,
   spaces,
   users,
-} = await useArkShell()
+} = useArkShell()
 
 const capabilities = computed(() => (me.value?.capabilities ?? []) as ArkCapabilityLike[])
 const baseNavigation = useArkNavigation(capabilities)

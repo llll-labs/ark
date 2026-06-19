@@ -34,6 +34,9 @@ interface BetterAuthSessionState {
   user?: null | Record<string, any>
 }
 
+let clientCheckPromise: Promise<ArkMeState | null> | null = null
+let clientSessionPromise: Promise<ArkMeState | null> | null = null
+
 function authErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message)
     return error.message
@@ -81,52 +84,78 @@ export function useArkAuth() {
   async function check(force = false) {
     if (checked.value && !force)
       return me.value
+    if (import.meta.client && !force && clientCheckPromise)
+      return clientCheckPromise
 
-    checking.value = true
-    error.value = null
-    try {
-      const result = await (nuxtApp.$trpc as any).ark.me.query()
-      me.value = result
-      checked.value = true
-      return result as ArkMeState
+    const run = async () => {
+      checking.value = true
+      error.value = null
+      try {
+        const result = await (nuxtApp.$trpc as any).ark.me.query()
+        me.value = result
+        checked.value = true
+        return result as ArkMeState
+      }
+      catch (cause) {
+        me.value = null
+        checked.value = true
+        error.value = authErrorMessage(cause, 'Session check failed')
+        return null
+      }
+      finally {
+        checking.value = false
+      }
     }
-    catch (cause) {
-      me.value = null
-      checked.value = true
-      error.value = authErrorMessage(cause, 'Session check failed')
-      return null
+
+    if (import.meta.client && !force) {
+      clientCheckPromise = run().finally(() => {
+        clientCheckPromise = null
+      })
+      return clientCheckPromise
     }
-    finally {
-      checking.value = false
-    }
+
+    return run()
   }
 
   async function checkSession() {
     if (me.value?.authenticated)
       return me.value
+    if (import.meta.client && clientSessionPromise)
+      return clientSessionPromise
 
-    try {
-      const result = await $fetch<BetterAuthSessionState | null>('/api/auth/get-session', {
-        credentials: 'include',
-      })
-      if (!result?.user)
-        return null
+    const run = async () => {
+      try {
+        const result = await $fetch<BetterAuthSessionState | null>('/api/auth/get-session', {
+          credentials: 'include',
+        })
+        if (!result?.user)
+          return null
 
-      me.value = {
-        ark: defaultArkState(),
-        arkUser: null,
-        arkUserExtension: null,
-        authenticated: true,
-        capabilities: [],
-        memberships: [],
-        session: result.session ?? null,
-        user: result.user,
+        me.value = {
+          ark: defaultArkState(),
+          arkUser: null,
+          arkUserExtension: null,
+          authenticated: true,
+          capabilities: [],
+          memberships: [],
+          session: result.session ?? null,
+          user: result.user,
+        }
+        return me.value
       }
-      return me.value
+      catch {
+        return null
+      }
     }
-    catch {
-      return null
+
+    if (import.meta.client) {
+      clientSessionPromise = run().finally(() => {
+        clientSessionPromise = null
+      })
+      return clientSessionPromise
     }
+
+    return run()
   }
 
   async function login(email: string, password: string) {
