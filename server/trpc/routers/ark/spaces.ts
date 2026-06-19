@@ -1,6 +1,7 @@
 import { isKnownArkCapability } from '../../../utils/app-extensions'
 import {
   and,
+  arkUserProcedure,
   baseProcedure,
   byIdSchema,
   arkChannelMembers,
@@ -15,7 +16,6 @@ import {
   arkMembershipRoles,
   arkMemberships,
   memberUpsertSchema,
-  protectedProcedure,
   requireSpaceAccess,
   roleCreateSchema,
   arkRoles,
@@ -48,7 +48,7 @@ export const spacesRouter = createTRPCRouter({
     await requireSpaceAccess(space.id, ctx, 'spaces.read')
     return space
   }),
-  create: protectedProcedure.input(spaceCreateSchema).mutation(async ({ ctx, input }) => {
+  create: arkUserProcedure.input(spaceCreateSchema).mutation(async ({ ctx, input }) => {
     const parent = input.parentSpaceId
       ? (await ctx.db.select().from(arkSpaces).where(eq(arkSpaces.id, input.parentSpaceId)).limit(1))[0]
       : await ctx.auth.publicSpace()
@@ -81,7 +81,7 @@ export const membersRouter = createTRPCRouter({
       eq(arkMemberships.scopeId, input.spaceId),
     ))
   }),
-  upsert: protectedProcedure.input(memberUpsertSchema).mutation(async ({ ctx, input }) => {
+  upsert: arkUserProcedure.input(memberUpsertSchema).mutation(async ({ ctx, input }) => {
     await requireSpaceAccess(input.scopeId, ctx, 'members.manage')
     const [row] = await ctx.db.insert(arkMemberships).values({
       arkUserId: input.arkUserId,
@@ -132,7 +132,7 @@ export const rolesRouter = createTRPCRouter({
     await requireSpaceAccess(root.id, ctx, 'roles.read')
     return ctx.db.select().from(arkRoles).orderBy(desc(arkRoles.rank))
   }),
-  create: protectedProcedure.input(roleCreateSchema).mutation(async ({ ctx, input }) => {
+  create: arkUserProcedure.input(roleCreateSchema).mutation(async ({ ctx, input }) => {
     const root = await ctx.auth.publicSpace()
     if (!root)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
@@ -162,7 +162,7 @@ export const permissionsRouter = createTRPCRouter({
     await requireSpaceAccess(root.id, ctx, 'roles.read')
     return ctx.db.select().from(arkGrants)
   }),
-  grant: protectedProcedure.input(grantCreateSchema).mutation(async ({ ctx, input }) => {
+  grant: arkUserProcedure.input(grantCreateSchema).mutation(async ({ ctx, input }) => {
     // Schema only checks shape; the known set (core + tenant-registered) is
     // runtime state, so enforce it here.
     if (!isKnownArkCapability(input.action))

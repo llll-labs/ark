@@ -1,4 +1,5 @@
 import {
+  arkUserProcedure,
   baseProcedure,
   collectionCreateSchema,
   arkCollections,
@@ -8,7 +9,6 @@ import {
   arkFields,
   itemCreateSchema,
   arkItems,
-  protectedProcedure,
   requireSpaceAccess,
   spaceScopedListSchema,
   TRPCError,
@@ -21,7 +21,7 @@ export const collectionsRouter = createTRPCRouter({
     await requireSpaceAccess(input.spaceId, ctx, 'items.read')
     return ctx.db.select().from(arkCollections).where(eq(arkCollections.spaceId, input.spaceId)).orderBy(arkCollections.createdAt)
   }),
-  create: protectedProcedure.input(collectionCreateSchema).mutation(async ({ ctx, input }) => {
+  create: arkUserProcedure.input(collectionCreateSchema).mutation(async ({ ctx, input }) => {
     await requireSpaceAccess(input.spaceId, ctx, 'knowledge.access')
     const access = await requireSpaceAccess(input.spaceId, ctx, 'items.manage')
     const [collection] = await ctx.db.insert(arkCollections).values({
@@ -41,7 +41,7 @@ export const collectionsRouter = createTRPCRouter({
     await requireSpaceAccess(collection.spaceId, ctx, 'items.read')
     return ctx.db.select().from(arkFields).where(eq(arkFields.collectionId, input.collectionId)).orderBy(arkFields.position)
   }),
-  createField: protectedProcedure.input(fieldCreateSchema).mutation(async ({ ctx, input }) => {
+  createField: arkUserProcedure.input(fieldCreateSchema).mutation(async ({ ctx, input }) => {
     const [collection] = await ctx.db.select().from(arkCollections).where(eq(arkCollections.id, input.collectionId)).limit(1)
     if (!collection)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Collection not found' })
@@ -65,7 +65,7 @@ export const itemsRouter = createTRPCRouter({
     await requireSpaceAccess(input.spaceId, ctx, 'items.read')
     return ctx.db.select().from(arkItems).where(eq(arkItems.spaceId, input.spaceId)).orderBy(arkItems.position, arkItems.createdAt).limit(100)
   }),
-  create: protectedProcedure.input(itemCreateSchema).mutation(async ({ ctx, input }) => {
+  create: arkUserProcedure.input(itemCreateSchema).mutation(async ({ ctx, input }) => {
     await requireSpaceAccess(input.spaceId, ctx, 'knowledge.access')
     const access = await requireSpaceAccess(input.spaceId, ctx, 'items.create')
     const [item] = await ctx.db.insert(arkItems).values({

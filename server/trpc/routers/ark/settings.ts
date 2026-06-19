@@ -1,5 +1,6 @@
 import {
   arkSettings,
+  arkUserProcedure,
   baseProcedure,
   createTRPCRouter,
   defaultArkSettingsValues,
@@ -33,7 +34,7 @@ export const settingsRouter = createTRPCRouter({
     const [settings] = await ctx.db.select().from(arkSettings).where(eq(arkSettings.key, 'main')).limit(1)
     return settings
   }),
-  update: protectedProcedure.input(settingsUpdateSchema).mutation(async ({ ctx, input }) => {
+  update: arkUserProcedure.input(settingsUpdateSchema).mutation(async ({ ctx, input }) => {
     const root = await ctx.auth.publicSpace()
     if (!root)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })

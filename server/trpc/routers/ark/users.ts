@@ -1,5 +1,6 @@
 import {
   and,
+  arkUserProcedure,
   arkUsers,
   arkAuthAccounts,
   createTRPCRouter,
@@ -65,7 +66,7 @@ export const usersRouter = createTRPCRouter({
       login: { providers: accounts.map(row => row.providerId), email: ctx.session?.user?.email ?? null },
     }
   }),
-  updateProfile: protectedProcedure.input(userProfileUpdateSchema).mutation(async ({ ctx, input }) => {
+  updateProfile: arkUserProcedure.input(userProfileUpdateSchema).mutation(async ({ ctx, input }) => {
     const arkUser = await ctx.auth.arkUser()
     if (!arkUser)
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
@@ -86,7 +87,7 @@ export const usersRouter = createTRPCRouter({
     }).where(eq(arkUsers.id, arkUser.id)).returning()
     return updated ?? null
   }),
-  updateSettings: protectedProcedure.input(userSettingsUpdateSchema).mutation(async ({ ctx, input }) => {
+  updateSettings: arkUserProcedure.input(userSettingsUpdateSchema).mutation(async ({ ctx, input }) => {
     const arkUser = await ctx.auth.arkUser()
     if (!arkUser)
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })

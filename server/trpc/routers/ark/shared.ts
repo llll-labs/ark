@@ -139,7 +139,7 @@ export {
   virtualArk,
 } from '../../../utils/authorization'
 export { publishChatEvent } from '../../../utils/realtime'
-export { baseProcedure, createTRPCRouter, protectedProcedure } from '../../init'
+export { arkUserProcedure, baseProcedure, createTRPCRouter, protectedProcedure } from '../../init'
 export { TRPCError } from '@trpc/server'
 export { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 export { z } from 'zod/v4'

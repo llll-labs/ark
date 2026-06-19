@@ -1,6 +1,7 @@
 import type { ArkUserRow } from './shared'
 import {
   and,
+  arkUserProcedure,
   arkUsers,
   asc,
   baseProcedure,
@@ -145,7 +146,7 @@ export const channelsRouter = createTRPCRouter({
     }
     return readable
   }),
-  create: protectedProcedure.input(channelCreateSchema).mutation(async ({ ctx, input }) => {
+  create: arkUserProcedure.input(channelCreateSchema).mutation(async ({ ctx, input }) => {
     const access = await requireSpaceAccess(input.spaceId, ctx, 'channels.create')
     await requireVisibleArkUsers(ctx, input.memberArkUserIds)
     const arkUser = access.arkUser ?? await ctx.auth.arkUser()
@@ -189,7 +190,7 @@ export const channelsRouter = createTRPCRouter({
     }
     return channel
   }),
-  upsertDm: protectedProcedure.input(dmUpsertSchema).mutation(async ({ ctx, input }) => {
+  upsertDm: arkUserProcedure.input(dmUpsertSchema).mutation(async ({ ctx, input }) => {
     const me = await ctx.auth.arkUser()
     if (!me)
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
@@ -219,7 +220,7 @@ export const channelsRouter = createTRPCRouter({
     }))).onConflictDoNothing()
     return channel
   }),
-  upsertThreadForMessage: protectedProcedure.input(z.object({ messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
+  upsertThreadForMessage: arkUserProcedure.input(z.object({ messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
     const [message] = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.id, input.messageId),
       isNull(arkMessages.deletedAt),
@@ -378,7 +379,7 @@ export const messagesRouter = createTRPCRouter({
     const rows = await ctx.db.select().from(arkMessages).where(eq(arkMessages.channelId, input.channelId)).orderBy(desc(arkMessages.createdAt)).limit(input.limit)
     return withMessageDetails(ctx.db, rows, access.arkUser?.id)
   }),
-  create: protectedProcedure.input(messageCreateSchema).mutation(async ({ ctx, input }) => {
+  create: arkUserProcedure.input(messageCreateSchema).mutation(async ({ ctx, input }) => {
     const { access, channel } = await getChannelForAccess(input.channelId, ctx, 'messages.create')
     const arkUser = access.arkUser ?? await ctx.auth.arkUser()
     let rootMessageId: string | null = null
@@ -456,7 +457,7 @@ export const messagesRouter = createTRPCRouter({
     }
     return message
   }),
-  react: protectedProcedure.input(z.object({ emoji: z.string().min(1).max(32), messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
+  react: arkUserProcedure.input(z.object({ emoji: z.string().min(1).max(32), messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
     const [message] = await ctx.db.select().from(arkMessages).where(eq(arkMessages.id, input.messageId)).limit(1)
     if (!message)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' })
@@ -492,7 +493,7 @@ export const messagesRouter = createTRPCRouter({
     }
     return { reacted: Boolean(reaction) }
   }),
-  pin: protectedProcedure.input(z.object({ messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
+  pin: arkUserProcedure.input(z.object({ messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
     const [message] = await ctx.db.select().from(arkMessages).where(eq(arkMessages.id, input.messageId)).limit(1)
     if (!message)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' })
@@ -511,7 +512,7 @@ export const messagesRouter = createTRPCRouter({
     }
     return pin ?? null
   }),
-  relate: protectedProcedure.input(z.object({
+  relate: arkUserProcedure.input(z.object({
     messageId: z.uuid(),
     relationType: messageRelationKindSchema,
     targetId: z.uuid().optional(),
@@ -531,7 +532,7 @@ export const messagesRouter = createTRPCRouter({
     }
     return relation
   }),
-  markRead: protectedProcedure.input(z.object({ channelId: z.uuid(), messageId: z.uuid().optional() })).mutation(async ({ ctx, input }) => {
+  markRead: arkUserProcedure.input(z.object({ channelId: z.uuid(), messageId: z.uuid().optional() })).mutation(async ({ ctx, input }) => {
     const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     if (!access.arkUser)
       throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })

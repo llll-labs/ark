@@ -58,7 +58,7 @@ function hasArkUser(subject: unknown) {
 async function completeArkProfileIfNeeded(auth: ReturnType<typeof useArkAuth>, me: any) {
   if (!me?.authenticated || hasArkUser(me))
     return me
-  return auth.completeProfile().catch(() => me)
+  return auth.completeProfile()
 }
 
 function onboardingPolicy(settings: unknown) {

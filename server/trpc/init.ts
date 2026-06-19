@@ -33,7 +33,33 @@ const requireUser = t.middleware(({ ctx, next }) => {
   })
 })
 
+const requireArkUser = t.middleware(async ({ ctx, next }) => {
+  if (!ctx.session?.user) {
+    throw new TRPCError({
+      code: 'UNAUTHORIZED',
+      message: 'Authentication required',
+    })
+  }
+
+  const arkUser = await ctx.auth.arkUser()
+  if (!arkUser) {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'Ark profile is not provisioned.',
+    })
+  }
+
+  return next({
+    ctx: {
+      ...ctx,
+      arkUser,
+      session: ctx.session,
+    },
+  })
+})
+
 export const createTRPCRouter = t.router
 export const createCallerFactory = t.createCallerFactory
+export const arkUserProcedure = t.procedure.use(requireArkUser)
 export const baseProcedure = t.procedure
 export const protectedProcedure = t.procedure.use(requireUser)

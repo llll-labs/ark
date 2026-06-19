@@ -1,6 +1,7 @@
 import { publishedAtForCuration } from '../../../utils/market-jobs'
 import {
   and,
+  arkUserProcedure,
   arkUsers,
   baseProcedure,
   byIdSchema,
@@ -94,7 +95,7 @@ export const marketRouter = createTRPCRouter({
         manageableSpaceIds: spaceIds,
       }
     }),
-    upsert: protectedProcedure.input(marketStoreUpsertSchema).mutation(async ({ ctx, input }) => {
+    upsert: arkUserProcedure.input(marketStoreUpsertSchema).mutation(async ({ ctx, input }) => {
       const owner = await requireStoreOwnerInput(ctx, input)
       const existing = input.id
         ? (await ctx.db.select().from(arkMarketStores).where(eq(arkMarketStores.id, input.id)).limit(1))[0]
@@ -134,7 +135,7 @@ export const marketRouter = createTRPCRouter({
       await replaceStoreTargets(ctx, store.id, input)
       return (await withStoreDetails(ctx, [store]))[0]
     }),
-    review: protectedProcedure.input(z.object({
+    review: arkUserProcedure.input(z.object({
       action: z.enum(['approve', 'reject']),
       id: z.uuid(),
       reviewNote: z.string().max(2000).optional(),
@@ -281,7 +282,7 @@ export const marketRouter = createTRPCRouter({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
       return canManage ? detailed : publicMarketJob(detailed)
     }),
-    upsert: protectedProcedure.input(marketJobUpsertSchema).mutation(async ({ ctx, input }) => {
+    upsert: arkUserProcedure.input(marketJobUpsertSchema).mutation(async ({ ctx, input }) => {
       const { categoryIds, tagIds, ...jobInput } = input
       const root = input.spaceId ? null : await ctx.auth.publicSpace()
       const spaceId = input.spaceId ?? root?.id
@@ -321,7 +322,7 @@ export const marketRouter = createTRPCRouter({
       await replaceJobTargets(ctx, job.id, { categoryIds, tagIds })
       return (await withMarketJobDetails(ctx, [job]))[0]
     }),
-    curate: protectedProcedure.input(marketJobCurationSchema).mutation(async ({ ctx, input }) => {
+    curate: arkUserProcedure.input(marketJobCurationSchema).mutation(async ({ ctx, input }) => {
       const [job] = await ctx.db.select().from(arkMarketJobs).where(eq(arkMarketJobs.id, input.id)).limit(1)
       if (!job)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
@@ -348,7 +349,7 @@ export const marketRouter = createTRPCRouter({
       }).where(eq(arkMarketJobs.id, job.id)).returning()
       return updated
     }),
-    startDiscussion: protectedProcedure.input(byIdSchema).mutation(async ({ ctx, input }) => {
+    startDiscussion: arkUserProcedure.input(byIdSchema).mutation(async ({ ctx, input }) => {
       const [job] = await ctx.db.select().from(arkMarketJobs).where(eq(arkMarketJobs.id, input.id)).limit(1)
       if (!job)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })

@@ -875,8 +875,14 @@ export async function getSpaceAccessScope(spaceId: string, db: ReturnType<typeof
   let currentSpaceId: string | null = spaceId
 
   while (currentSpaceId) {
-    if (visited.has(currentSpaceId) || rows.length >= maxDepth)
+    if (visited.has(currentSpaceId)) {
+      console.warn('[ark] Space access scope cycle detected', { currentSpaceId, spaceId })
       break
+    }
+    if (rows.length >= maxDepth) {
+      console.warn('[ark] Space access scope depth limit reached', { maxDepth, spaceId })
+      break
+    }
     visited.add(currentSpaceId)
 
     const [space] = await db.select().from(arkSpaces).where(eq(arkSpaces.id, currentSpaceId)).limit(1)

@@ -5,7 +5,7 @@ export function useArkAuthedAction() {
 
   async function runAuthed(action: () => Promise<void> | void) {
     const me = auth.checked.value ? auth.me.value : await auth.check()
-    if (me?.authenticated) {
+    if (me?.authenticated && me.arkUser) {
       await action()
       return
     }

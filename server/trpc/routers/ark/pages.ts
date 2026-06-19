@@ -1,11 +1,11 @@
 import {
+  arkUserProcedure,
   baseProcedure,
   byIdSchema,
   createTRPCRouter,
   eq,
   pageCreateSchema,
   arkPages,
-  protectedProcedure,
   requireSpaceAccess,
   spaceScopedListSchema,
   TRPCError,
@@ -24,7 +24,7 @@ export const pagesRouter = createTRPCRouter({
     await requireSpaceAccess(page.spaceId, ctx, 'pages.read')
     return page
   }),
-  create: protectedProcedure.input(pageCreateSchema).mutation(async ({ ctx, input }) => {
+  create: arkUserProcedure.input(pageCreateSchema).mutation(async ({ ctx, input }) => {
     await requireSpaceAccess(input.spaceId, ctx, 'pages.manage')
     const [page] = await ctx.db.insert(arkPages).values({
       componentName: input.componentName,
@@ -41,7 +41,7 @@ export const pagesRouter = createTRPCRouter({
     }).returning()
     return page
   }),
-  update: protectedProcedure.input(pageCreateSchema.partial().extend({ id: z.uuid() })).mutation(async ({ ctx, input }) => {
+  update: arkUserProcedure.input(pageCreateSchema.partial().extend({ id: z.uuid() })).mutation(async ({ ctx, input }) => {
     const [page] = await ctx.db.select().from(arkPages).where(eq(arkPages.id, input.id)).limit(1)
     if (!page)
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Page not found' })

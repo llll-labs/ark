@@ -9,11 +9,13 @@ const props = withDefaults(defineProps<{
   brandTitle?: string
   intentTitle?: string
   modelValue: boolean
+  redirectPath?: string
   stats?: AuthModalStat[]
 }>(), {
   brandSubtitle: '',
   brandTitle: '',
   intentTitle: '',
+  redirectPath: '',
   stats: () => [],
 })
 
@@ -67,7 +69,7 @@ function finishAuth() {
             :brand-subtitle="brandSubtitle"
             :brand-title="brandTitle"
             :intent-title="intentTitle"
-            :oauth-redirect="route.fullPath"
+            :oauth-redirect="redirectPath || route.fullPath"
             :stats="stats"
             @authenticated="finishAuth"
             @navigate="closeForNavigation"
