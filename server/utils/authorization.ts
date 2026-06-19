@@ -497,6 +497,69 @@ async function ensureMembershipRole(input: { arkUserId: string, roleId?: string,
   return membership
 }
 
+export async function ensureArkUserPersonalSpace(arkUser: ArkUserRow, db: ReturnType<typeof useDatabase> = useDatabase()) {
+  const [existing] = await db.select().from(arkSpaces).where(and(
+    eq(arkSpaces.ownerArkUserId, arkUser.id),
+    eq(arkSpaces.kind, 'organization'),
+    isNull(arkSpaces.parentSpaceId),
+    isNull(arkSpaces.deletedAt),
+  )).limit(1)
+
+  const personal = existing ?? await (async () => {
+    const baseSlug = slugifySpaceName(arkUser.displayName) || `user-${arkUser.id.slice(0, 8)}`
+    let personalSlug = baseSlug
+    for (let attempt = 2; attempt <= 50; attempt += 1) {
+      const [taken] = await db.select({ id: arkSpaces.id }).from(arkSpaces).where(and(
+        isNull(arkSpaces.parentSpaceId),
+        eq(arkSpaces.slug, personalSlug),
+        isNull(arkSpaces.deletedAt),
+      )).limit(1)
+      if (!taken)
+        break
+      personalSlug = `${baseSlug}-${attempt}`
+    }
+
+    const [created] = await db.insert(arkSpaces).values({
+      inheritAccess: false,
+      kind: 'organization',
+      name: arkUser.displayName,
+      ownerArkUserId: arkUser.id,
+      slug: personalSlug,
+      status: 'active',
+      visibility: 'private',
+    }).returning()
+    if (!created)
+      throw new Error('Personal Ark space could not be created.')
+    return created
+  })()
+
+  const { ownerRole } = await ensureDefaultPermissionRoles(personal.id)
+  const [membership] = await db.insert(arkMemberships).values({
+    arkUserId: arkUser.id,
+    joinedAt: new Date(),
+    roleId: ownerRole?.id,
+    scopeId: personal.id,
+    scopeType: 'space',
+    status: 'active',
+  }).onConflictDoUpdate({
+    set: {
+      roleId: ownerRole?.id,
+      status: 'active',
+      updatedAt: new Date(),
+    },
+    target: [arkMemberships.scopeType, arkMemberships.scopeId, arkMemberships.arkUserId],
+  }).returning()
+
+  if (membership && ownerRole) {
+    await db.insert(arkMembershipRoles).values({
+      membershipId: membership.id,
+      roleId: ownerRole.id,
+    }).onConflictDoNothing()
+  }
+
+  return personal
+}
+
 async function ensureConfiguredAdmin(rootSpaceId: string) {
   const credentials = adminCredentials()
   if (!credentials)
@@ -804,39 +867,7 @@ export async function ensureArkUser(authUser: AuthUser) {
   // Every user gets a personal account space — an organization with a single
   // owner member. Personal vs company is just member count; the market actor is
   // always a space, never the raw user.
-  const baseSlug = slugifySpaceName(created.displayName) || `user-${created.id.slice(0, 8)}`
-  let personalSlug = baseSlug
-  for (let attempt = 2; attempt <= 50; attempt += 1) {
-    const [taken] = await db.select({ id: arkSpaces.id }).from(arkSpaces).where(and(
-      isNull(arkSpaces.parentSpaceId),
-      eq(arkSpaces.slug, personalSlug),
-    )).limit(1)
-    if (!taken)
-      break
-    personalSlug = `${baseSlug}-${attempt}`
-  }
-  const [personal] = await db.insert(arkSpaces).values({
-    inheritAccess: false,
-    kind: 'organization',
-    name: created.displayName,
-    ownerArkUserId: created.id,
-    slug: personalSlug,
-    status: 'active',
-    visibility: 'private',
-  }).returning()
-  if (personal) {
-    const { ownerRole } = await ensureDefaultPermissionRoles(personal.id)
-    const [personalMembership] = await db.insert(arkMemberships).values({
-      arkUserId: created.id,
-      joinedAt: new Date(),
-      roleId: ownerRole?.id,
-      scopeId: personal.id,
-      scopeType: 'space',
-      status: 'active',
-    }).onConflictDoNothing().returning()
-    if (personalMembership && ownerRole)
-      await db.insert(arkMembershipRoles).values({ membershipId: personalMembership.id, roleId: ownerRole.id }).onConflictDoNothing()
-  }
+  await ensureArkUserPersonalSpace(created, db)
 
   return syncProviderAvatarSafely(created, authUser)
 }
