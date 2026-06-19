@@ -9,9 +9,7 @@ import {
   createTRPCRouter,
   currentArkUser,
   defaultArkIdentity,
-  ensureDefaultArk,
   eq,
-  getDefaultArk,
   getEffectiveCapabilities,
   getPublicSpace,
   loadArkUserExtension,
@@ -23,7 +21,6 @@ import { usersRouter } from './ark/users'
 
 export const arkRouter = createTRPCRouter({
   health: baseProcedure.query(async ({ ctx }) => {
-    await ensureDefaultArk()
     await ctx.db.execute(sql`select 1 as ok`)
     return { database: 'reachable', ok: true }
   }),
@@ -42,7 +39,7 @@ export const arkRouter = createTRPCRouter({
       }
     }
 
-    const ark = await getDefaultArk()
+    const ark = defaultArkIdentity()
     const arkUser = await currentArkUser(ctx.session)
     const root = await getPublicSpace()
     const capabilityAccess = root ? await getEffectiveCapabilities(root.id, ctx.session) : { capabilities: [] as string[] }

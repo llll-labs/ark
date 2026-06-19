@@ -195,6 +195,10 @@ function adminCredentials() {
   }
 }
 
+function isConfiguredAdminEmail(email: string) {
+  return adminCredentials()?.email === email.trim().toLowerCase()
+}
+
 async function ensureGrantsForSubject(input: {
   actions: string[]
   reconcile?: boolean
@@ -614,12 +618,11 @@ export async function ensureDefaultArk(options: { force?: boolean } = {}) {
 }
 
 export async function getDefaultArk() {
-  return ensureDefaultArk()
+  return defaultArkIdentity()
 }
 
 export async function ensureArkUser(authUser: AuthUser) {
   const db = useDatabase()
-  await ensureDefaultArk()
 
   const [existing] = await db
     .select()
@@ -630,6 +633,14 @@ export async function ensureArkUser(authUser: AuthUser) {
   if (existing)
     return syncProviderAvatarSafely(existing, authUser)
 
+  let root = await getPublicSpace()
+  if (!root && isConfiguredAdminEmail(authUser.email)) {
+    await ensureDefaultArk()
+    root = await getPublicSpace()
+  }
+  if (!root)
+    throw new Error('Ark is not initialized. Sign in as the configured admin or run setup first.')
+
   const [created] = await db.insert(arkUsers).values({
     authUserId: authUser.id,
     displayName: authUser.name || authUser.email.split('@')[0] || 'member',
@@ -638,31 +649,25 @@ export async function ensureArkUser(authUser: AuthUser) {
   if (!created)
     throw new Error('Ark user could not be created.')
 
-  const root = await getPublicSpace()
-  if (root) {
-    const credentials = adminCredentials()
-    const roleKey = credentials?.email === authUser.email.toLowerCase()
-      ? 'admin'
-      : 'member'
-    const [role] = await db.select().from(arkRoles).where(and(
-      eq(arkRoles.scopeType, 'space'),
-      eq(arkRoles.scopeId, root.id),
-      eq(arkRoles.key, roleKey),
-    )).limit(1)
-    const [membership] = await db.insert(arkMemberships).values({
-      arkUserId: created.id,
-      joinedAt: new Date(),
-      roleId: role?.id,
-      scopeId: root.id,
-      scopeType: 'space',
-      status: 'active',
-    }).onConflictDoNothing().returning()
-    if (membership) {
-      if (role)
-        await db.insert(arkMembershipRoles).values({ membershipId: membership.id, roleId: role.id }).onConflictDoNothing()
-      if (role && operatorRoleKeys.has(role.key))
-        await syncOperatorChannelMembers(root.id)
-    }
+  const roleKey = isConfiguredAdminEmail(authUser.email) ? 'admin' : 'member'
+  const [role] = await db.select().from(arkRoles).where(and(
+    eq(arkRoles.scopeType, 'space'),
+    eq(arkRoles.scopeId, root.id),
+    eq(arkRoles.key, roleKey),
+  )).limit(1)
+  const [membership] = await db.insert(arkMemberships).values({
+    arkUserId: created.id,
+    joinedAt: new Date(),
+    roleId: role?.id,
+    scopeId: root.id,
+    scopeType: 'space',
+    status: 'active',
+  }).onConflictDoNothing().returning()
+  if (membership) {
+    if (role)
+      await db.insert(arkMembershipRoles).values({ membershipId: membership.id, roleId: role.id }).onConflictDoNothing()
+    if (role && operatorRoleKeys.has(role.key))
+      await syncOperatorChannelMembers(root.id)
   }
 
   // Every user gets a personal account space — an organization with a single
@@ -708,12 +713,17 @@ export async function ensureArkUser(authUser: AuthUser) {
 export async function currentArkUser(session: Session) {
   if (!session?.user)
     return null
-  return ensureArkUser(session.user)
+  const db = useDatabase()
+  const [arkUser] = await db
+    .select()
+    .from(arkUsers)
+    .where(eq(arkUsers.authUserId, session.user.id))
+    .limit(1)
+  return arkUser ?? null
 }
 
 export async function getPublicSpace() {
   const db = useDatabase()
-  await ensureDefaultArk()
   const [root] = await db.select().from(arkSpaces).where(and(eq(arkSpaces.isDefault, true), isNull(arkSpaces.deletedAt))).limit(1)
   return root ?? null
 }

@@ -100,6 +100,7 @@ export function useArkAuth() {
         headers: localeHeaders(),
         method: 'POST',
       })
+      await completeAuthProfile()
       return await check(true)
     }
     catch (cause) {
@@ -159,6 +160,7 @@ export function useArkAuth() {
         credentials: 'include',
         method: 'POST',
       })
+      await completeAuthProfile()
       return await check(true)
     }
     catch (cause) {
@@ -175,6 +177,7 @@ export function useArkAuth() {
         credentials: 'include',
         method: 'POST',
       })
+      await completeAuthProfile()
       return await check(true)
     }
     catch (cause) {
@@ -203,6 +206,13 @@ export function useArkAuth() {
       error.value = authErrorMessage(cause, 'Telegram login failed')
       throw new Error(error.value)
     }
+  }
+
+  async function completeAuthProfile() {
+    await $fetch('/api/ark/auth/complete', {
+      credentials: 'include',
+      method: 'POST',
+    })
   }
 
   async function loginWithDiscordOAuth(redirect?: unknown) {
