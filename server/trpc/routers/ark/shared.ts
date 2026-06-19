@@ -44,6 +44,12 @@ function resolveRequestAuth(subject: any) {
   return subject?.auth as RequestAuthContext | undefined
 }
 
+const visibleArkUserIdsByContext = new WeakMap<object, Promise<null | string[]>>()
+
+function contextObject(subject: unknown) {
+  return subject && typeof subject === 'object' ? subject as object : null
+}
+
 // Re-export the shared surface so domain router files import everything from
 // `./shared` instead of reaching back across the tree for tables, zod schemas,
 // drizzle operators, auth utils, and tRPC procedures.
@@ -370,7 +376,7 @@ export async function requireSpaceAccess(spaceId: string, sessionOrCtx: any, cap
   return access
 }
 
-export async function visibleArkUserIds(ctx: AuthCapableContext) {
+async function resolveVisibleArkUserIds(ctx: AuthCapableContext) {
   const arkUser = ctx.auth ? await ctx.auth.arkUser() : await currentArkUser(ctx.session)
   if (!arkUser)
     return []
@@ -420,6 +426,19 @@ export async function visibleArkUserIds(ctx: AuthCapableContext) {
   }
 
   return Array.from(visible)
+}
+
+export async function visibleArkUserIds(ctx: AuthCapableContext) {
+  const key = contextObject(ctx)
+  if (!key)
+    return resolveVisibleArkUserIds(ctx)
+
+  let promise = visibleArkUserIdsByContext.get(key)
+  if (!promise) {
+    promise = resolveVisibleArkUserIds(ctx)
+    visibleArkUserIdsByContext.set(key, promise)
+  }
+  return promise
 }
 
 export async function requireVisibleArkUsers(ctx: AuthCapableContext, arkUserIds: string[]) {

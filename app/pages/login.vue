@@ -13,16 +13,17 @@ function redirectTarget(target?: string) {
   return safeRedirect(target) || safeRedirect(route.query.redirect) || '/'
 }
 
-async function postAuthTarget(target?: string) {
-  const me = await auth.check(true)
+async function postAuthTarget(me: any, target?: string) {
   const finalTarget = redirectTarget(target) === '/onboarding' ? '/app/jobs' : redirectTarget(target)
   return onboardingRedirectTarget(settings.value, me, finalTarget) || finalTarget
 }
 
 async function finishAuthenticated(target?: string) {
-  const me = await auth.check(true)
-  if (me?.authenticated)
-    await navigateTo(await postAuthTarget(target), { replace: true })
+  let me = await auth.check(true)
+  if (me?.authenticated && !me.arkUser)
+    me = await auth.completeProfile().catch(() => me)
+  if (me?.authenticated && me.arkUser)
+    await navigateTo(await postAuthTarget(me, target), { replace: true })
 }
 
 onMounted(() => {

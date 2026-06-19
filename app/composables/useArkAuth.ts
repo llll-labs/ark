@@ -34,8 +34,14 @@ interface BetterAuthSessionState {
   user?: null | Record<string, any>
 }
 
+interface ArkSessionProbeState {
+  authenticated: boolean
+  session: null | Record<string, any>
+  user: null | Record<string, any>
+}
+
 let clientCheckPromise: Promise<ArkMeState | null> | null = null
-let clientSessionPromise: Promise<ArkMeState | null> | null = null
+let clientSessionPromise: Promise<ArkSessionProbeState | null> | null = null
 
 function authErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message)
@@ -70,10 +76,6 @@ export function useArkAuth() {
   const user = computed(() => me.value?.user ?? null)
   const profile = computed(() => me.value?.arkUser ?? null)
   const authenticated = computed(() => Boolean(me.value?.authenticated))
-
-  function defaultArkState() {
-    return me.value?.ark ?? { id: 'single', name: 'Ark', slug: 'public' }
-  }
 
   function localeHeaders(): Record<string, string> {
     const locale = (nuxtApp.$i18n as { locale?: string | { value?: string } } | undefined)?.locale
@@ -118,8 +120,13 @@ export function useArkAuth() {
   }
 
   async function checkSession() {
-    if (me.value?.authenticated)
-      return me.value
+    if (me.value?.authenticated) {
+      return {
+        authenticated: true,
+        session: me.value.session,
+        user: me.value.user,
+      }
+    }
     if (import.meta.client && clientSessionPromise)
       return clientSessionPromise
 
@@ -130,20 +137,11 @@ export function useArkAuth() {
         })
         if (!result?.user)
           return null
-        if (checked.value && me.value?.authenticated)
-          return me.value
-
-        me.value = {
-          ark: defaultArkState(),
-          arkUser: null,
-          arkUserExtension: null,
+        return {
           authenticated: true,
-          capabilities: [],
-          memberships: [],
           session: result.session ?? null,
           user: result.user,
         }
-        return me.value
       }
       catch {
         return null
@@ -284,6 +282,18 @@ export function useArkAuth() {
     })
   }
 
+  async function completeProfile() {
+    error.value = null
+    try {
+      await completeAuthProfile()
+      return await check(true)
+    }
+    catch (cause) {
+      error.value = authErrorMessage(cause, 'Profile completion failed')
+      throw new Error(error.value)
+    }
+  }
+
   async function loginWithDiscordOAuth(redirect?: unknown) {
     error.value = null
     try {
@@ -324,6 +334,7 @@ export function useArkAuth() {
     checkSession,
     checked,
     checking,
+    completeProfile,
     error,
     login,
     loginWithDiscordOAuth,

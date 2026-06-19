@@ -572,7 +572,7 @@ export async function getArkSession(event: H3Event) {
 }
 
 export async function requireAuthUser(event: H3Event) {
-  const session = await getArkSession(event)
+  const { session } = await createBoundRequestAuth(event)
   if (!session?.user) {
     throw createError({
       statusCode: 401,
@@ -641,6 +641,36 @@ export function createRequestAuth(event: H3Event, db: ReturnType<typeof useDatab
   }
 
   return requestAuth
+}
+
+export async function createBoundRequestAuth(event: H3Event, db: ReturnType<typeof useDatabase> = useDatabase()) {
+  const requestAuth = createRequestAuth(event, db)
+  const session = await requestAuth.session()
+  bindRequestAuth(session, requestAuth)
+  return { auth: requestAuth, db, session }
+}
+
+export async function requireCurrentArkUser(event: H3Event, db: ReturnType<typeof useDatabase> = useDatabase()) {
+  const context = await createBoundRequestAuth(event, db)
+  if (!context.session?.user) {
+    throw createError({
+      statusCode: 401,
+      statusMessage: 'Authentication required',
+    })
+  }
+
+  const arkUser = await context.auth.arkUser()
+  if (!arkUser) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: 'Ark profile is not provisioned.',
+    })
+  }
+
+  return {
+    ...context,
+    arkUser,
+  }
 }
 
 async function ensureDefaultArkUncached() {
@@ -982,31 +1012,27 @@ export async function canReadChannel(channelId: string, session: Session, option
 }
 
 export async function requireSpaceCapability(event: H3Event, spaceId: string, capability: ArkCapabilityLike) {
-  const session = await getArkSession(event)
-  const access = await getEffectiveCapabilities(spaceId, session)
-  if (!access.capabilities.includes(capability)) {
-    throw createError({
-      statusCode: 403,
-      statusMessage: `Missing capability: ${capability}`,
-    })
-  }
+  const { auth, session } = await createBoundRequestAuth(event)
+  const access = await auth.requireSpace(spaceId, capability)
   return { access, session }
 }
 
 export async function requirePublicCapability(event: H3Event, capability: ArkCapabilityLike) {
-  const root = await getPublicSpace()
+  const { auth, session } = await createBoundRequestAuth(event)
+  const root = await auth.publicSpace()
   if (!root) {
     throw createError({
       statusCode: 404,
       statusMessage: 'Public space not found',
     })
   }
-  return requireSpaceCapability(event, root.id, capability)
+  const access = await auth.requireSpace(root.id, capability)
+  return { access, session }
 }
 
 export async function requireChannelCapability(event: H3Event, channelId: string, capability: ArkCapabilityLike) {
-  const session = await getArkSession(event)
-  const channelAccess = await canReadChannel(channelId, session)
+  const { auth, session } = await createBoundRequestAuth(event)
+  const channelAccess = await auth.canReadChannel(channelId)
   if (!channelAccess.allowed) {
     throw createError({
       statusCode: channelAccess.reason === 'not_found' ? 404 : 403,

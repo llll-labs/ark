@@ -1,7 +1,7 @@
 import type { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { arkFiles, arkFileVariants } from '../../db/schema'
-import { currentArkUser, getArkSession, getPublicSpace, requireSpaceCapability } from './authorization'
+import { createBoundRequestAuth } from './authorization'
 import { useDatabase } from './db'
 import { fileVariantObjectPath, originalFileObjectPath } from './file-paths'
 import { defaultPrivateStorage, defaultPublicStorage, putStoredObject } from './storage'
@@ -128,13 +128,13 @@ export async function storeUploadedFile(
   spaceId?: string,
   options: { visibility?: 'private' | 'public' } = {},
 ) {
-  const session = await getArkSession(event)
-  const targetSpace = spaceId ?? (await getPublicSpace())?.id
+  const { auth } = await createBoundRequestAuth(event)
+  const targetSpace = spaceId ?? (await auth.publicSpace())?.id
   if (!targetSpace)
     throw new Error('Public space is missing.')
 
-  const { access } = await requireSpaceCapability(event, targetSpace, 'files.upload')
-  const arkUser = access.arkUser ?? await currentArkUser(session)
+  const access = await auth.requireSpace(targetSpace, 'files.upload')
+  const arkUser = access.arkUser ?? await auth.arkUser()
 
   return storeFileFromBuffer({
     data: part.data,

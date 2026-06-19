@@ -1,7 +1,7 @@
 import type { H3Event } from 'h3'
 import type { ArkCapability } from '../../db/zod'
 import { createError } from 'h3'
-import { getArkSession, getEffectiveCapabilities, getPublicSpace } from './authorization'
+import { createBoundRequestAuth } from './authorization'
 
 export interface AppSettingsRegistration<TSettings> {
   dataKey: string
@@ -31,11 +31,11 @@ export function appSettingsSection(registration: AppSettingsRegistration<unknown
 }
 
 export async function requireAppSettingsCapability(event: H3Event, capability: Extract<ArkCapability, 'settings.read' | 'settings.manage'>) {
-  const session = await getArkSession(event)
-  const root = await getPublicSpace()
+  const { auth, session } = await createBoundRequestAuth(event)
+  const root = await auth.publicSpace()
   if (!root)
     throw createError({ statusCode: 404, statusMessage: 'Public space not found.' })
-  const access = await getEffectiveCapabilities(root.id, session)
+  const access = await auth.capabilitiesFor(root.id)
   if (!access.capabilities.includes(capability)) {
     throw createError({
       statusCode: session?.user ? 403 : 401,

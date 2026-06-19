@@ -134,5 +134,11 @@ export const auth = betterAuth({
     ...authPlugins,
   ],
   secret: resolveAppSecret(),
+  session: {
+    cookieCache: {
+      enabled: true,
+      maxAge: 60,
+    },
+  },
   trustedOrigins,
 })

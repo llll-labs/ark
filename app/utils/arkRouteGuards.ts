@@ -51,6 +51,16 @@ function onboardingBypassed(subject: unknown) {
   ].includes(String(capability)))
 }
 
+function hasArkUser(subject: unknown) {
+  return Boolean(settingsObject(subject).arkUser)
+}
+
+async function completeArkProfileIfNeeded(auth: ReturnType<typeof useArkAuth>, me: any) {
+  if (!me?.authenticated || hasArkUser(me))
+    return me
+  return auth.completeProfile().catch(() => me)
+}
+
 function onboardingPolicy(settings: unknown) {
   const onboardingJson = settingsObject(settingsObject(settings).onboardingJson)
   const enabled = onboardingJson.enabled !== false
@@ -138,8 +148,8 @@ export async function runArkAuthGuard(to: any) {
   const auth = useArkAuth()
 
   if (to.path === '/login') {
-    const me = await auth.check()
-    if (me?.authenticated)
+    const me = await completeArkProfileIfNeeded(auth, await auth.check())
+    if (me?.authenticated && hasArkUser(me))
       return navigateTo(telegramMiniPostAuthTarget('/login', to.query.redirect), { replace: true })
     return
   }
@@ -147,8 +157,14 @@ export async function runArkAuthGuard(to: any) {
   if (isPublicArkRoute(to.path))
     return
 
-  const me = await auth.check()
+  const me = await completeArkProfileIfNeeded(auth, await auth.check())
   if (!me?.authenticated) {
+    return navigateTo({
+      path: '/login',
+      query: { redirect: to.fullPath },
+    }, { replace: true })
+  }
+  if (!hasArkUser(me)) {
     return navigateTo({
       path: '/login',
       query: { redirect: to.fullPath },
@@ -164,8 +180,10 @@ export async function runArkOnboardingGuard(to: any) {
     return
 
   const auth = useArkAuth()
-  const me = auth.checked.value ? auth.me.value : await auth.check()
+  const me = await completeArkProfileIfNeeded(auth, auth.checked.value ? auth.me.value : await auth.check())
   if (!me?.authenticated)
+    return
+  if (!hasArkUser(me))
     return
 
   const { $trpc } = useNuxtApp()

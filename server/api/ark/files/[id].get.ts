@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { createError, defineEventHandler, getQuery, getRouterParam, sendRedirect, sendStream } from 'h3'
 import { arkFiles, arkFileVariants } from '../../../../db/schema'
-import { getArkSession, getEffectiveCapabilities } from '../../../utils/authorization'
+import { createBoundRequestAuth } from '../../../utils/authorization'
 import { useDatabase } from '../../../utils/db'
 import { publicObjectUrl, readStoredObject, verifySignedFileUrl } from '../../../utils/storage'
 
@@ -41,11 +41,11 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 403, statusMessage: 'File signed URL is invalid or expired.' })
 
     const spaceId = typeof file.metadataJson.spaceId === 'string' ? file.metadataJson.spaceId : null
-    const session = await getArkSession(event)
+    const { auth, session } = await createBoundRequestAuth(event)
     if (!session?.user)
       throw createError({ statusCode: 403, statusMessage: 'File access denied.' })
     if (spaceId) {
-      const access = await getEffectiveCapabilities(spaceId, session)
+      const access = await auth.capabilitiesFor(spaceId)
       if (!access.capabilities.includes('files.read'))
         throw createError({ statusCode: 403, statusMessage: 'File access denied.' })
     }
