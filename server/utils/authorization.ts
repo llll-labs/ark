@@ -38,7 +38,7 @@ interface AuthUser {
 
 export const defaultArkName = process.env.NUXT_PUBLIC_APP_NAME ?? 'Ark'
 
-export function virtualArk() {
+export function defaultArkIdentity() {
   return {
     id: 'single',
     name: defaultArkName,
@@ -46,9 +46,38 @@ export function virtualArk() {
   }
 }
 
-type VirtualArk = ReturnType<typeof virtualArk>
+export const virtualArk = defaultArkIdentity
+
+export function defaultArkSettingsValues() {
+  return {
+    authJson: {
+      discord_enabled: discordOAuthConfigured(),
+      email_password_enabled: true,
+      registration_enabled: true,
+      registration_mode: 'open',
+      telegram_enabled: Boolean(String(process.env.TELEGRAM_BOT_TOKEN ?? '').trim()),
+    },
+    name: defaultArkName,
+    onboardingJson: {
+      // Neutral core default. Tenants extend this field list (or replace the
+      // onboarding flow with their own component) via ark settings.
+      onboarding_fields: ['name', 'bio'],
+      onboarding_method: 'onboarding',
+      review_required: false,
+    },
+    dataJson: {},
+    portalJson: {
+      default_route: '/app/jobs',
+      public_root_unscoped: true,
+    },
+    primaryColor: '#0B0F12',
+    accentColor: '#00D1C1',
+  }
+}
+
+type DefaultArkIdentity = ReturnType<typeof defaultArkIdentity>
 let defaultArkEnsured = false
-let defaultArkEnsurePromise: Promise<VirtualArk> | null = null
+let defaultArkEnsurePromise: Promise<DefaultArkIdentity> | null = null
 
 async function syncProviderAvatarSafely(arkUser: typeof arkUsers.$inferSelect, authUser: AuthUser) {
   try {
@@ -512,30 +541,7 @@ export async function requireAuthUser(event: H3Event) {
 async function ensureDefaultArkUncached() {
   const db = useDatabase()
 
-  await db.insert(arkSettings).values({
-    authJson: {
-      discord_enabled: discordOAuthConfigured(),
-      email_password_enabled: true,
-      registration_enabled: true,
-      registration_mode: 'open',
-      telegram_enabled: Boolean(String(process.env.TELEGRAM_BOT_TOKEN ?? '').trim()),
-    },
-    name: defaultArkName,
-    onboardingJson: {
-      // Neutral core default. Tenants extend this field list (or replace the
-      // onboarding flow with their own component) via ark settings.
-      onboarding_fields: ['name', 'bio'],
-      onboarding_method: 'onboarding',
-      review_required: false,
-    },
-    dataJson: {},
-    portalJson: {
-      default_route: '/app/jobs',
-      public_root_unscoped: true,
-    },
-    primaryColor: '#0B0F12',
-    accentColor: '#00D1C1',
-  }).onConflictDoNothing()
+  await db.insert(arkSettings).values(defaultArkSettingsValues()).onConflictDoNothing()
 
   const [existingRoot] = await db.select().from(arkSpaces).where(and(
     isNull(arkSpaces.deletedAt),
@@ -558,7 +564,7 @@ async function ensureDefaultArkUncached() {
     await ensureDefaultChannels(existingRoot.id)
     await ensureConfiguredAdmin(existingRoot.id)
     await syncOperatorChannelMembers(existingRoot.id)
-    return virtualArk()
+    return defaultArkIdentity()
   }
 
   const insertedSpaces = await db.insert(arkSpaces).values([
@@ -579,18 +585,18 @@ async function ensureDefaultArkUncached() {
       eq(arkSpaces.slug, 'public'),
     )).limit(1))[0]
   if (!root)
-    return virtualArk()
+    return defaultArkIdentity()
 
   await ensureDefaultPermissionRoles(root.id)
   await ensureDefaultChannels(root.id)
   await ensureConfiguredAdmin(root.id)
 
-  return virtualArk()
+  return defaultArkIdentity()
 }
 
 export async function ensureDefaultArk(options: { force?: boolean } = {}) {
   if (defaultArkEnsured && !options.force)
-    return virtualArk()
+    return defaultArkIdentity()
 
   if (defaultArkEnsurePromise && !options.force)
     return defaultArkEnsurePromise

@@ -2,7 +2,7 @@ import {
   arkSettings,
   baseProcedure,
   createTRPCRouter,
-  ensureDefaultArk,
+  defaultArkSettingsValues,
   eq,
   getPublicSpace,
   protectedProcedure,
@@ -13,9 +13,18 @@ import {
 
 export const settingsRouter = createTRPCRouter({
   public: baseProcedure.query(async ({ ctx }) => {
-    await ensureDefaultArk()
     const [settings] = await ctx.db.select().from(arkSettings).where(eq(arkSettings.key, 'main')).limit(1)
-    return settings
+    return settings ?? {
+      ...defaultArkSettingsValues(),
+      createdAt: new Date(0),
+      description: null,
+      iconFileId: null,
+      id: '00000000-0000-0000-0000-000000000000',
+      key: 'main',
+      logoFileId: null,
+      themeJson: {},
+      updatedAt: new Date(0),
+    }
   }),
   admin: protectedProcedure.query(async ({ ctx }) => {
     const root = await getPublicSpace()
