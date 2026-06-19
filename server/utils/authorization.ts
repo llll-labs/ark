@@ -46,6 +46,10 @@ export function virtualArk() {
   }
 }
 
+type VirtualArk = ReturnType<typeof virtualArk>
+let defaultArkEnsured = false
+let defaultArkEnsurePromise: Promise<VirtualArk> | null = null
+
 async function syncProviderAvatarSafely(arkUser: typeof arkUsers.$inferSelect, authUser: AuthUser) {
   try {
     return await syncArkUserProviderAvatar(arkUser, authUser)
@@ -505,7 +509,7 @@ export async function requireAuthUser(event: H3Event) {
   return session
 }
 
-export async function ensureDefaultArk() {
+async function ensureDefaultArkUncached() {
   const db = useDatabase()
 
   await db.insert(arkSettings).values({
@@ -582,6 +586,25 @@ export async function ensureDefaultArk() {
   await ensureConfiguredAdmin(root.id)
 
   return virtualArk()
+}
+
+export async function ensureDefaultArk(options: { force?: boolean } = {}) {
+  if (defaultArkEnsured && !options.force)
+    return virtualArk()
+
+  if (defaultArkEnsurePromise && !options.force)
+    return defaultArkEnsurePromise
+
+  defaultArkEnsurePromise = ensureDefaultArkUncached()
+    .then((ark) => {
+      defaultArkEnsured = true
+      return ark
+    })
+    .finally(() => {
+      defaultArkEnsurePromise = null
+    })
+
+  return defaultArkEnsurePromise
 }
 
 export async function getDefaultArk() {

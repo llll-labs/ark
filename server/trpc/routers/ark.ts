@@ -16,6 +16,7 @@ import {
   loadArkUserExtension,
   arkMemberships,
   sql,
+  virtualArk,
 } from './ark/shared'
 import { membersRouter, permissionsRouter, rolesRouter, spacesRouter } from './ark/spaces'
 import { usersRouter } from './ark/users'
@@ -28,10 +29,9 @@ export const arkRouter = createTRPCRouter({
   }),
 
   me: baseProcedure.query(async ({ ctx }) => {
-    const ark = await getDefaultArk()
     if (!ctx.session?.user) {
       return {
-        ark,
+        ark: virtualArk(),
         arkUser: null,
         arkUserExtension: null,
         authenticated: false,
@@ -42,6 +42,7 @@ export const arkRouter = createTRPCRouter({
       }
     }
 
+    const ark = await getDefaultArk()
     const arkUser = await currentArkUser(ctx.session)
     const root = await getPublicSpace()
     const capabilityAccess = root ? await getEffectiveCapabilities(root.id, ctx.session) : { capabilities: [] as string[] }

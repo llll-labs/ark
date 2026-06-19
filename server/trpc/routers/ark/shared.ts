@@ -117,6 +117,7 @@ export {
   getDmSpace,
   getEffectiveCapabilities,
   getPublicSpace,
+  virtualArk,
 } from '../../../utils/authorization'
 export { publishChatEvent } from '../../../utils/realtime'
 export { baseProcedure, createTRPCRouter, protectedProcedure } from '../../init'
