@@ -9,7 +9,6 @@ export const {
   signIn,
   signOut,
   signUp,
-  useSession,
 } = arkAuthClient
 
 interface ArkAuthRegisterInput {
@@ -29,19 +28,7 @@ interface ArkMeState {
   user: null | Record<string, any>
 }
 
-interface BetterAuthSessionState {
-  session?: null | Record<string, any>
-  user?: null | Record<string, any>
-}
-
-interface ArkSessionProbeState {
-  authenticated: boolean
-  session: null | Record<string, any>
-  user: null | Record<string, any>
-}
-
 let clientCheckPromise: Promise<ArkMeState | null> | null = null
-let clientSessionPromise: Promise<ArkSessionProbeState | null> | null = null
 
 function authErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message)
@@ -114,45 +101,6 @@ export function useArkAuth() {
         clientCheckPromise = null
       })
       return clientCheckPromise
-    }
-
-    return run()
-  }
-
-  async function checkSession() {
-    if (me.value?.authenticated) {
-      return {
-        authenticated: true,
-        session: me.value.session,
-        user: me.value.user,
-      }
-    }
-    if (import.meta.client && clientSessionPromise)
-      return clientSessionPromise
-
-    const run = async () => {
-      try {
-        const result = await $fetch<BetterAuthSessionState | null>('/api/auth/get-session', {
-          credentials: 'include',
-        })
-        if (!result?.user)
-          return null
-        return {
-          authenticated: true,
-          session: result.session ?? null,
-          user: result.user,
-        }
-      }
-      catch {
-        return null
-      }
-    }
-
-    if (import.meta.client) {
-      clientSessionPromise = run().finally(() => {
-        clientSessionPromise = null
-      })
-      return clientSessionPromise
     }
 
     return run()
@@ -331,7 +279,6 @@ export function useArkAuth() {
   return {
     authenticated,
     check,
-    checkSession,
     checked,
     checking,
     completeProfile,

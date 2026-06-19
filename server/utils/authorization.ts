@@ -869,10 +869,16 @@ export async function getDmSpace() {
 }
 
 export async function getSpaceAccessScope(spaceId: string, db: ReturnType<typeof useDatabase> = useDatabase()): Promise<SpaceRow[]> {
-  const rows = []
+  const rows: SpaceRow[] = []
+  const visited = new Set<string>()
+  const maxDepth = 32
   let currentSpaceId: string | null = spaceId
 
   while (currentSpaceId) {
+    if (visited.has(currentSpaceId) || rows.length >= maxDepth)
+      break
+    visited.add(currentSpaceId)
+
     const [space] = await db.select().from(arkSpaces).where(eq(arkSpaces.id, currentSpaceId)).limit(1)
     if (!space || space.deletedAt)
       break
@@ -923,6 +929,7 @@ export async function getEffectiveCapabilities(spaceId: string, session: Session
 
   const scopedGrants = await db.select().from(arkGrants).where(and(
     eq(arkGrants.status, 'active'),
+    eq(arkGrants.scopeType, 'space'),
     inArray(arkGrants.scopeId, spaceIds),
   ))
   const globalGrants = await db.select().from(arkGrants).where(and(
