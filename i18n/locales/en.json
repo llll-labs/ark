@@ -69,6 +69,8 @@
     "displayName": "Display name",
     "email": "Email",
     "password": "Password",
+    "passwordConfirm": "Confirm password",
+    "passwordMismatch": "Passwords do not match.",
     "createAccount": "Create account",
     "login": "Login",
     "verificationCode": "6-digit code",

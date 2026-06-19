@@ -69,6 +69,8 @@
     "displayName": "Отображаемое имя",
     "email": "Email",
     "password": "Пароль",
+    "passwordConfirm": "Повторите пароль",
+    "passwordMismatch": "Пароли не совпадают.",
     "createAccount": "Создать аккаунт",
     "login": "Войти",
     "verificationCode": "6-значный код",
