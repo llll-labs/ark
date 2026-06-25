@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs'
+import { PGlite } from '@electric-sql/pglite'
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite'
 import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
@@ -14,6 +15,7 @@ interface DatabaseConfig {
 }
 
 let postgresClient: postgres.Sql | undefined
+let pgliteClient: PGlite | undefined
 let database: ReturnType<typeof drizzlePostgres<typeof schema>> | ReturnType<typeof drizzlePglite<typeof schema>> | undefined
 
 function normalizeDbClient(value: string | undefined): DatabaseClient | null {
@@ -65,12 +67,8 @@ export function useDatabase() {
 
   mkdirSync(config.dataDir!, { recursive: true })
 
-  database = drizzlePglite({
-    connection: {
-      dataDir: config.dataDir,
-    },
-    schema,
-  })
+  pgliteClient = new PGlite(config.dataDir)
+  database = drizzlePglite(pgliteClient, { schema })
 
   return database
 }
@@ -82,7 +80,10 @@ export function queryResultRows<T = Record<string, unknown>>(result: { rows: T[]
 export async function resetDatabaseForTests() {
   if (postgresClient)
     await postgresClient.end({ timeout: 1 })
+  if (pgliteClient)
+    await pgliteClient.close()
 
   postgresClient = undefined
+  pgliteClient = undefined
   database = undefined
 }

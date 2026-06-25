@@ -1,5 +1,7 @@
 import type { useDatabase } from './db'
+import type { ArkActionEvents, ArkActionHandler } from './hooks'
 import { arkCapabilityActionPattern, arkCapabilityValues } from '../../db/zod'
+import { arkHooks } from './hooks'
 
 type Database = ReturnType<typeof useDatabase>
 
@@ -81,4 +83,24 @@ export function loadArkTenantCapabilitiesForRole(role: ArkDefaultRoleKey) {
 
 export function isKnownArkCapability(action: string) {
   return (arkCapabilityValues as readonly string[]).includes(action) || arkTenantCapabilities.has(action)
+}
+
+export interface ArkUserCompletedActionOptions {
+  required?: boolean
+}
+
+export type ArkUserCompletedAction = ArkActionHandler<'ark.users.completed'>
+export type ArkUserCompletedPayload = ArkActionEvents['ark.users.completed']
+
+export function registerArkUserCompletedAction(
+  key: string,
+  handler: ArkUserCompletedAction,
+  options: ArkUserCompletedActionOptions = {},
+) {
+  if (!key.trim())
+    throw new Error('registerArkUserCompletedAction: key is required')
+  arkHooks.action('ark.users.completed', handler, {
+    key: `tenant.${key}`,
+    required: options.required ?? true,
+  })
 }

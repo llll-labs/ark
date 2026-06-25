@@ -1,8 +1,13 @@
 import type { H3Event } from 'h3'
-import type { ArkCapability, ArkCapabilityLike } from '../../db/zod'
+import type { ArkCapabilityLike } from '../../db/zod'
 import { hashPassword } from 'better-auth/crypto'
 import { and, eq, inArray, isNull, or } from 'drizzle-orm'
 import { createError } from 'h3'
+import { ensureDefaultPermissionRoles } from '../domain/permissions'
+import {
+  ensureArkUser as ensureDomainArkUser,
+  ensureArkUserPersonalSpace as ensureDomainArkUserPersonalSpace,
+} from '../domain/users'
 import {
   arkSettings,
   arkUsers,
@@ -17,11 +22,9 @@ import {
   arkRoles,
   arkSpaces,
 } from '../../db/schema'
-import { loadArkTenantCapabilitiesForRole } from './app-extensions'
 import { auth } from './auth'
 import { useDatabase } from './db'
 import { discordOAuthConfigured } from './discord-oauth'
-import { syncArkUserProviderAvatar } from './provider-avatar'
 
 type Session = Awaited<ReturnType<typeof getArkSession>>
 type ChannelRow = typeof arkChannels.$inferSelect
@@ -119,108 +122,6 @@ function requestAuthForSession(session: Session) {
   return key ? requestAuthBySession.get(key) ?? null : null
 }
 
-async function syncProviderAvatarSafely(arkUser: ArkUserRow, authUser: AuthUser) {
-  try {
-    return await syncArkUserProviderAvatar(arkUser, authUser)
-  }
-  catch (error) {
-    console.warn('[ark] Provider avatar sync failed', error)
-    return arkUser
-  }
-}
-
-function slugifySpaceName(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 80)
-}
-
-const ownerCapabilities: ArkCapability[] = [
-  'market.access',
-  'forum.access',
-  'knowledge.access',
-  'agent.access',
-  'dm.access',
-  'settings.read',
-  'settings.manage',
-  'spaces.read',
-  'spaces.manage',
-  'members.read',
-  'members.manage',
-  'roles.read',
-  'roles.manage',
-  'channels.read',
-  'channels.create',
-  'channels.manage',
-  'messages.read',
-  'messages.create',
-  'messages.manage',
-  'files.read',
-  'files.upload',
-  'files.manage',
-  'pages.read',
-  'pages.manage',
-  'items.read',
-  'items.create',
-  'items.update',
-  'items.manage',
-  'market.jobs.read',
-  'market.jobs.create',
-  'market.jobs.manage',
-]
-
-// Moderators: member baseline + curation, posting, channel & DM creation.
-// Not granted by default to anyone — assign the `moderator` role to roll out.
-const moderatorCapabilities: ArkCapability[] = [
-  'market.access',
-  'forum.access',
-  'knowledge.access',
-  'dm.access',
-  'settings.read',
-  'spaces.read',
-  'members.read',
-  'roles.read',
-  'channels.read',
-  'channels.create',
-  'channels.manage',
-  'messages.read',
-  'messages.create',
-  'messages.manage',
-  'files.read',
-  'files.upload',
-  'pages.read',
-  'items.read',
-  'items.create',
-  'items.update',
-  'market.jobs.read',
-  'market.jobs.create',
-  'market.jobs.manage',
-]
-
-const memberCapabilities: ArkCapability[] = [
-  'market.access',
-  'forum.access',
-  'knowledge.access',
-  'settings.read',
-  'spaces.read',
-  'channels.read',
-  'messages.read',
-  'messages.create',
-  'files.read',
-  'files.upload',
-  'pages.read',
-  'items.read',
-  'items.create',
-  'items.update',
-  'market.jobs.read',
-]
-
-const anonCapabilities: ArkCapability[] = [
-  'settings.read',
-]
-
 const operatorRoleKeys = new Set(['admin', 'owner'])
 
 function adminCredentials() {
@@ -237,95 +138,6 @@ function adminCredentials() {
 
 function isConfiguredAdminEmail(email: string) {
   return adminCredentials()?.email === email.trim().toLowerCase()
-}
-
-async function ensureGrantsForSubject(input: {
-  actions: string[]
-  reconcile?: boolean
-  scopeId: string
-  subjectId?: null | string
-  subjectType: 'anon' | 'role'
-}) {
-  const db = useDatabase()
-  const existing = await db.select().from(arkGrants).where(and(
-    eq(arkGrants.status, 'active'),
-    eq(arkGrants.scopeType, 'space'),
-    eq(arkGrants.scopeId, input.scopeId),
-    eq(arkGrants.subjectType, input.subjectType),
-    input.subjectId ? eq(arkGrants.subjectId, input.subjectId) : isNull(arkGrants.subjectId),
-  ))
-  const existingActions = new Set(existing.filter(row => row.effect === 'allow').map(row => row.action))
-  const missing = input.actions.filter(action => !existingActions.has(action))
-  const desiredActions = new Set(input.actions)
-  const extra = input.reconcile
-    ? existing.filter(row => row.effect === 'allow' && !desiredActions.has(row.action))
-    : []
-  for (const grant of extra) {
-    await db.update(arkGrants).set({
-      status: 'inactive',
-      updatedAt: new Date(),
-    }).where(eq(arkGrants.id, grant.id))
-  }
-  if (!missing.length)
-    return
-
-  await db.insert(arkGrants).values(missing.map(action => ({
-    action,
-    effect: 'allow' as const,
-    scopeId: input.scopeId,
-    scopeType: 'space' as const,
-    subjectId: input.subjectId ?? null,
-    subjectType: input.subjectType,
-  })))
-}
-
-async function ensureDefaultPermissionRoles(rootSpaceId: string) {
-  const db = useDatabase()
-
-  await db.insert(arkRoles).values([
-    { isSystem: true, key: 'admin', name: 'Admin', rank: 120, scopeId: rootSpaceId, scopeType: 'space' },
-    { isSystem: true, key: 'owner', name: 'Owner', rank: 100, scopeId: rootSpaceId, scopeType: 'space' },
-    { isSystem: true, key: 'moderator', name: 'Moderator', rank: 50, scopeId: rootSpaceId, scopeType: 'space' },
-    { isSystem: true, key: 'member', name: 'Member', rank: 10, scopeId: rootSpaceId, scopeType: 'space' },
-  ]).onConflictDoNothing()
-
-  await db.update(arkRoles).set({
-    isSystem: true,
-    name: 'Admin',
-    rank: 120,
-    updatedAt: new Date(),
-  }).where(and(
-    eq(arkRoles.scopeType, 'space'),
-    eq(arkRoles.scopeId, rootSpaceId),
-    eq(arkRoles.key, 'admin'),
-  ))
-
-  const roleRows = await db.select().from(arkRoles).where(and(
-    eq(arkRoles.scopeType, 'space'),
-    eq(arkRoles.scopeId, rootSpaceId),
-  ))
-
-  const adminRole = roleRows.find(role => role.key === 'admin')
-  const ownerRole = roleRows.find(role => role.key === 'owner')
-  const moderatorRole = roleRows.find(role => role.key === 'moderator')
-  const memberRole = roleRows.find(role => role.key === 'member')
-
-  // Tenant capabilities registered via registerArkCapabilities() extend the
-  // built-in bundles for the roles they declared.
-  if (adminRole)
-    await ensureGrantsForSubject({ actions: [...ownerCapabilities, ...loadArkTenantCapabilitiesForRole('admin')], scopeId: rootSpaceId, subjectId: adminRole.id, subjectType: 'role' })
-  if (ownerRole)
-    await ensureGrantsForSubject({ actions: [...ownerCapabilities, ...loadArkTenantCapabilitiesForRole('owner')], scopeId: rootSpaceId, subjectId: ownerRole.id, subjectType: 'role' })
-  // Add-only (no reconcile): seeds the baseline if missing, but never strips
-  // grants — so the Permissions admin UI is the control plane and its toggles
-  // persist instead of being reverted on the next ensureDefaultArk call.
-  if (moderatorRole)
-    await ensureGrantsForSubject({ actions: [...moderatorCapabilities, ...loadArkTenantCapabilitiesForRole('moderator')], scopeId: rootSpaceId, subjectId: moderatorRole.id, subjectType: 'role' })
-  if (memberRole)
-    await ensureGrantsForSubject({ actions: [...memberCapabilities, ...loadArkTenantCapabilitiesForRole('member')], scopeId: rootSpaceId, subjectId: memberRole.id, subjectType: 'role' })
-  await ensureGrantsForSubject({ actions: [...anonCapabilities, ...loadArkTenantCapabilitiesForRole('anon')], scopeId: rootSpaceId, subjectId: null, subjectType: 'anon' })
-
-  return { adminRole, memberRole, moderatorRole, ownerRole }
 }
 
 export async function ensureDefaultChannelCategory(spaceId: string) {
@@ -498,66 +310,7 @@ async function ensureMembershipRole(input: { arkUserId: string, roleId?: string,
 }
 
 export async function ensureArkUserPersonalSpace(arkUser: ArkUserRow, db: ReturnType<typeof useDatabase> = useDatabase()) {
-  const [existing] = await db.select().from(arkSpaces).where(and(
-    eq(arkSpaces.ownerArkUserId, arkUser.id),
-    eq(arkSpaces.kind, 'organization'),
-    isNull(arkSpaces.parentSpaceId),
-    isNull(arkSpaces.deletedAt),
-  )).limit(1)
-
-  const personal = existing ?? await (async () => {
-    const baseSlug = slugifySpaceName(arkUser.displayName) || `user-${arkUser.id.slice(0, 8)}`
-    let personalSlug = baseSlug
-    for (let attempt = 2; attempt <= 50; attempt += 1) {
-      const [taken] = await db.select({ id: arkSpaces.id }).from(arkSpaces).where(and(
-        isNull(arkSpaces.parentSpaceId),
-        eq(arkSpaces.slug, personalSlug),
-        isNull(arkSpaces.deletedAt),
-      )).limit(1)
-      if (!taken)
-        break
-      personalSlug = `${baseSlug}-${attempt}`
-    }
-
-    const [created] = await db.insert(arkSpaces).values({
-      inheritAccess: false,
-      kind: 'organization',
-      name: arkUser.displayName,
-      ownerArkUserId: arkUser.id,
-      slug: personalSlug,
-      status: 'active',
-      visibility: 'private',
-    }).returning()
-    if (!created)
-      throw new Error('Personal Ark space could not be created.')
-    return created
-  })()
-
-  const { ownerRole } = await ensureDefaultPermissionRoles(personal.id)
-  const [membership] = await db.insert(arkMemberships).values({
-    arkUserId: arkUser.id,
-    joinedAt: new Date(),
-    roleId: ownerRole?.id,
-    scopeId: personal.id,
-    scopeType: 'space',
-    status: 'active',
-  }).onConflictDoUpdate({
-    set: {
-      roleId: ownerRole?.id,
-      status: 'active',
-      updatedAt: new Date(),
-    },
-    target: [arkMemberships.scopeType, arkMemberships.scopeId, arkMemberships.arkUserId],
-  }).returning()
-
-  if (membership && ownerRole) {
-    await db.insert(arkMembershipRoles).values({
-      membershipId: membership.id,
-      roleId: ownerRole.id,
-    }).onConflictDoNothing()
-  }
-
-  return personal
+  return ensureDomainArkUserPersonalSpace(arkUser, db)
 }
 
 async function ensureConfiguredAdmin(rootSpaceId: string) {
@@ -817,61 +570,13 @@ export async function getDefaultArk() {
 
 export async function ensureArkUser(authUser: AuthUser) {
   const db = useDatabase()
-
-  const [existing] = await db
-    .select()
-    .from(arkUsers)
-    .where(eq(arkUsers.authUserId, authUser.id))
-    .limit(1)
-
-  if (existing) {
-    await ensureArkUserPersonalSpace(existing, db)
-    return syncProviderAvatarSafely(existing, authUser)
-  }
-
-  let root = await getPublicSpace()
-  if (!root && isConfiguredAdminEmail(authUser.email)) {
-    await ensureDefaultArk()
-    root = await getPublicSpace()
-  }
-  if (!root)
-    throw new Error('Ark is not initialized. Sign in as the configured admin or run setup first.')
-
-  const [created] = await db.insert(arkUsers).values({
-    authUserId: authUser.id,
-    displayName: authUser.name || authUser.email.split('@')[0] || 'member',
-    kind: 'human',
-  }).returning()
-  if (!created)
-    throw new Error('Ark user could not be created.')
-
-  const roleKey = isConfiguredAdminEmail(authUser.email) ? 'admin' : 'member'
-  const [role] = await db.select().from(arkRoles).where(and(
-    eq(arkRoles.scopeType, 'space'),
-    eq(arkRoles.scopeId, root.id),
-    eq(arkRoles.key, roleKey),
-  )).limit(1)
-  const [membership] = await db.insert(arkMemberships).values({
-    arkUserId: created.id,
-    joinedAt: new Date(),
-    roleId: role?.id,
-    scopeId: root.id,
-    scopeType: 'space',
-    status: 'active',
-  }).onConflictDoNothing().returning()
-  if (membership) {
-    if (role)
-      await db.insert(arkMembershipRoles).values({ membershipId: membership.id, roleId: role.id }).onConflictDoNothing()
-    if (role && operatorRoleKeys.has(role.key))
-      await syncOperatorChannelMembers(root.id)
-  }
-
-  // Every user gets a personal account space — an organization with a single
-  // owner member. Personal vs company is just member count; the market actor is
-  // always a space, never the raw user.
-  await ensureArkUserPersonalSpace(created, db)
-
-  return syncProviderAvatarSafely(created, authUser)
+  return ensureDomainArkUser(authUser, {
+    db,
+    ensureDefaultArk,
+    getPublicSpace,
+    isConfiguredAdminEmail,
+    syncOperatorChannelMembers,
+  })
 }
 
 export async function currentArkUser(session: Session, options: AuthLookupOptions = {}): Promise<ArkUserRow | null> {
