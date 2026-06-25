@@ -1,5 +1,7 @@
 import { emailOTPClient, genericOAuthClient } from 'better-auth/client/plugins'
 import { createAuthClient } from 'better-auth/vue'
+import { storeToRefs } from 'pinia'
+import { useArkAuthRuntimeStore } from '../stores/arkAuthRuntime'
 
 export const arkAuthClient = createAuthClient({
   plugins: [emailOTPClient(), genericOAuthClient()],
@@ -16,19 +18,6 @@ interface ArkAuthRegisterInput {
   name?: string
   password: string
 }
-
-interface ArkMeState {
-  ark: { id: string, name: string, slug: string }
-  arkUser: null | Record<string, any>
-  arkUserExtension: null | Record<string, any>
-  authenticated: boolean
-  capabilities: string[]
-  memberships: Record<string, any>[]
-  session: null | Record<string, any>
-  user: null | Record<string, any>
-}
-
-let clientCheckPromise: Promise<ArkMeState | null> | null = null
 
 function authErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message)
@@ -54,56 +43,18 @@ function absoluteAuthUrl(path: string) {
 }
 
 export function useArkAuth() {
-  const me = useState<ArkMeState | null>('ark-auth-me', () => null)
-  const checked = useState('ark-auth-checked', () => false)
-  const checking = useState('ark-auth-checking', () => false)
-  const error = useState<string | null>('ark-auth-error', () => null)
+  const runtime = useArkAuthRuntimeStore()
+  const { checked, checking, error, me } = storeToRefs(runtime)
   const nuxtApp = useNuxtApp()
 
   const user = computed(() => me.value?.user ?? null)
   const profile = computed(() => me.value?.arkUser ?? null)
-  const authenticated = computed(() => Boolean(me.value?.authenticated))
+  const authenticated = computed(() => runtime.authenticated)
 
   function localeHeaders(): Record<string, string> {
     const locale = (nuxtApp.$i18n as { locale?: string | { value?: string } } | undefined)?.locale
     const code = typeof locale === 'string' ? locale : locale?.value
     return code ? { 'x-ark-locale': code } : {}
-  }
-
-  async function check(force = false) {
-    if (checked.value && !force)
-      return me.value
-    if (import.meta.client && !force && clientCheckPromise)
-      return clientCheckPromise
-
-    const run = async () => {
-      checking.value = true
-      error.value = null
-      try {
-        const result = await (nuxtApp.$trpc as any).ark.me.query()
-        me.value = result
-        checked.value = true
-        return result as ArkMeState
-      }
-      catch (cause) {
-        me.value = null
-        checked.value = true
-        error.value = authErrorMessage(cause, 'Session check failed')
-        return null
-      }
-      finally {
-        checking.value = false
-      }
-    }
-
-    if (import.meta.client && !force) {
-      clientCheckPromise = run().finally(() => {
-        clientCheckPromise = null
-      })
-      return clientCheckPromise
-    }
-
-    return run()
   }
 
   async function login(email: string, password: string) {
@@ -116,7 +67,7 @@ export function useArkAuth() {
         method: 'POST',
       })
       await completeAuthProfile()
-      return await check(true)
+      return await runtime.check(true)
     }
     catch (cause) {
       error.value = authErrorMessage(cause, 'Login failed')
@@ -176,7 +127,7 @@ export function useArkAuth() {
         method: 'POST',
       })
       await completeAuthProfile()
-      return await check(true)
+      return await runtime.check(true)
     }
     catch (cause) {
       error.value = authErrorMessage(cause, 'Verification failed')
@@ -193,7 +144,7 @@ export function useArkAuth() {
         method: 'POST',
       })
       await completeAuthProfile()
-      return await check(true)
+      return await runtime.check(true)
     }
     catch (cause) {
       error.value = authErrorMessage(cause, 'Telegram login failed')
@@ -234,7 +185,7 @@ export function useArkAuth() {
     error.value = null
     try {
       await completeAuthProfile()
-      return await check(true)
+      return await runtime.check(true)
     }
     catch (cause) {
       error.value = authErrorMessage(cause, 'Profile completion failed')
@@ -266,8 +217,7 @@ export function useArkAuth() {
 
   async function logout() {
     error.value = null
-    me.value = null
-    checked.value = false
+    runtime.resetSession()
     if (import.meta.client) {
       suppressTelegramMiniAutoAuth()
       window.location.assign('/api/ark/auth/logout')
@@ -278,7 +228,7 @@ export function useArkAuth() {
 
   return {
     authenticated,
-    check,
+    check: runtime.check,
     checked,
     checking,
     completeProfile,

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { storeToRefs } from 'pinia'
+
 interface AuthPanelStat {
   label: string
   value: string
@@ -30,8 +32,9 @@ const emit = defineEmits<{
 }>()
 
 const auth = useArkAuth()
+const authRuntime = useArkAuthRuntimeStore()
 const telegram = useTelegramMiniAuth()
-const { $trpc } = useNuxtApp()
+const { discordOAuthStatus, publicSettings: settings, telegramOAuthStatus } = storeToRefs(authRuntime)
 const { t } = useI18n()
 
 const mode = ref<'login' | 'register'>('login')
@@ -46,14 +49,9 @@ const pending = ref(false)
 const discordOauthPending = ref(false)
 const telegramOauthPending = ref(false)
 const hasTelegramMiniLaunch = ref(false)
+const telegramMiniAutoAuthStarted = ref(false)
 const errorMessage = ref('')
 const infoMessage = ref('')
-
-const { data: settings } = await useAsyncData('ark-auth-panel-settings', () => $trpc.ark.settings.public.query().catch(() => null))
-const { data: telegramOAuthStatus } = await useAsyncData('ark-auth-panel-telegram-oauth-status', () =>
-  $fetch<{ configured: boolean }>('/api/ark/auth/telegram-oauth/status').catch(() => ({ configured: false })))
-const { data: discordOAuthStatus } = await useAsyncData('ark-auth-panel-discord-oauth-status', () =>
-  $fetch<{ configured: boolean }>('/api/ark/auth/discord-oauth/status').catch(() => ({ configured: false })))
 
 const authJson = computed<Record<string, any>>(() => {
   const value = settings.value?.authJson
@@ -241,11 +239,20 @@ async function loginWithDiscord() {
   }
 }
 
-onMounted(async () => {
+function maybeAutoTelegramMiniAuth() {
+  if (telegramMiniAutoAuthStarted.value || !props.autoTelegramMiniAuth || !telegramEnabled.value || !hasTelegramMiniLaunch.value || isTelegramMiniAutoAuthSuppressed())
+    return
+  telegramMiniAutoAuthStarted.value = true
+  void loginWithTelegram()
+}
+
+onMounted(() => {
+  void authRuntime.loadAuthUi()
   hasTelegramMiniLaunch.value = telegram.hasLaunchParams()
-  if (props.autoTelegramMiniAuth && telegramEnabled.value && hasTelegramMiniLaunch.value && !isTelegramMiniAutoAuthSuppressed())
-    await loginWithTelegram()
+  maybeAutoTelegramMiniAuth()
 })
+
+watch(telegramEnabled, maybeAutoTelegramMiniAuth)
 
 watch(mode, () => {
   passwordConfirm.value = ''

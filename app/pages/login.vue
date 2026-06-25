@@ -1,19 +1,22 @@
 <script setup lang="ts">
+import { storeToRefs } from 'pinia'
+
 definePageMeta({
   layout: false,
 })
 
 const route = useRoute()
 const auth = useArkAuth()
-const { $trpc } = useNuxtApp()
-
-const { data: settings } = await useAsyncData('ark-login-settings', () => $trpc.ark.settings.public.query().catch(() => null))
+const authRuntime = useArkAuthRuntimeStore()
+const { publicSettings: settings } = storeToRefs(authRuntime)
 
 function redirectTarget(target?: string) {
   return safeRedirect(target) || safeRedirect(route.query.redirect) || '/'
 }
 
 async function postAuthTarget(me: any, target?: string) {
+  if (!authRuntime.authUiLoaded)
+    await authRuntime.loadAuthUi()
   const finalTarget = redirectTarget(target) === '/onboarding' ? '/app/jobs' : redirectTarget(target)
   return onboardingRedirectTarget(settings.value, me, finalTarget) || finalTarget
 }
@@ -27,6 +30,7 @@ async function finishAuthenticated(target?: string) {
 }
 
 onMounted(() => {
+  void authRuntime.loadAuthUi()
   void finishAuthenticated()
 })
 </script>
