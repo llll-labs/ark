@@ -1,4 +1,8 @@
-export default defineNuxtPlugin(() => {
-  const authRuntime = useArkAuthRuntimeStore()
-  void authRuntime.preload()
+export default defineNuxtPlugin({
+  dependsOn: ['ark-trpc'],
+  name: 'ark-auth-preload',
+  setup() {
+    const authRuntime = useArkAuthRuntimeStore()
+    void authRuntime.preload()
+  },
 })
