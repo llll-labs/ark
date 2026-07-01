@@ -36,11 +36,15 @@ const authRuntime = useArkAuthRuntimeStore()
 const telegram = useTelegramMiniAuth()
 const { discordOAuthStatus, publicSettings: settings, telegramOAuthStatus } = storeToRefs(authRuntime)
 const { t } = useI18n()
+const route = useRoute()
 
-const mode = ref<'login' | 'register'>('login')
+const mode = ref<'forgot' | 'login' | 'register'>('login')
 const email = ref('')
 const password = ref('')
 const passwordConfirm = ref('')
+const resetEmail = ref('')
+const resetPassword = ref('')
+const resetPasswordConfirm = ref('')
 const verificationCode = ref('')
 const verificationEmail = ref('')
 const legalAccepted = ref(false)
@@ -70,6 +74,11 @@ const verifyingEmail = computed(() => Boolean(verificationEmail.value))
 const legalReady = computed(() => verifyingEmail.value || !legalRequired.value || legalAccepted.value)
 const passwordConfirmRequired = computed(() => mode.value === 'register' && !verifyingEmail.value)
 const passwordsMatch = computed(() => !passwordConfirmRequired.value || password.value === passwordConfirm.value)
+const resetPasswordToken = computed(() => {
+  const token = route.query.token
+  return Array.isArray(token) ? String(token[0] ?? '').trim() : String(token ?? '').trim()
+})
+const resetPasswordsMatch = computed(() => !resetPasswordConfirm.value || resetPassword.value === resetPasswordConfirm.value)
 const canSubmit = computed(() => {
   if (!email.value.trim() || !password.value)
     return false
@@ -77,6 +86,8 @@ const canSubmit = computed(() => {
     return false
   return legalReady.value
 })
+const canRequestPasswordReset = computed(() => Boolean(resetEmail.value.trim()) && !pending.value)
+const canResetPassword = computed(() => Boolean(resetPasswordToken.value) && resetPassword.value.length >= 8 && resetPassword.value === resetPasswordConfirm.value && !pending.value)
 const loginTabs = computed<Array<{ icon: string, id: 'login' | 'register', label: string }>>(() => [
   { icon: 'i-lucide-log-in', id: 'login', label: t('auth.tabLogin') },
   ...(registrationEnabled.value ? [{ icon: 'i-lucide-user-plus', id: 'register' as const, label: t('auth.tabRegister') }] : []),
@@ -112,6 +123,55 @@ function cancelEmailVerification() {
 
 function normalizedVerificationCode() {
   return verificationCode.value.replace(/\D/g, '').slice(0, 6)
+}
+
+function startPasswordResetRequest() {
+  resetEmail.value = email.value.trim()
+  password.value = ''
+  passwordConfirm.value = ''
+  errorMessage.value = ''
+  infoMessage.value = ''
+  mode.value = 'forgot'
+}
+
+async function requestPasswordReset() {
+  if (!canRequestPasswordReset.value)
+    return
+  errorMessage.value = ''
+  infoMessage.value = ''
+  pending.value = true
+  try {
+    await auth.requestPasswordReset(resetEmail.value.trim())
+    infoMessage.value = t('auth.passwordResetEmailSent')
+  }
+  catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : t('auth.passwordResetRequestFailed')
+  }
+  finally {
+    pending.value = false
+  }
+}
+
+async function submitPasswordReset() {
+  if (!canResetPassword.value)
+    return
+  errorMessage.value = ''
+  infoMessage.value = ''
+  pending.value = true
+  try {
+    await auth.resetPassword(resetPasswordToken.value, resetPassword.value)
+    resetPassword.value = ''
+    resetPasswordConfirm.value = ''
+    mode.value = 'login'
+    await navigateTo('/login', { replace: true })
+    infoMessage.value = t('auth.passwordResetComplete')
+  }
+  catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : t('auth.passwordResetFailed')
+  }
+  finally {
+    pending.value = false
+  }
 }
 
 async function resendVerificationCode() {
@@ -259,6 +319,11 @@ watch(mode, () => {
   legalAccepted.value = false
 })
 
+watch(() => route.query.error, (error) => {
+  if (String(error ?? '') === 'INVALID_TOKEN')
+    errorMessage.value = t('auth.passwordResetInvalid')
+}, { immediate: true })
+
 watch(legalRequired, (required) => {
   if (!required)
     legalAccepted.value = true
@@ -329,7 +394,48 @@ watch(legalRequired, (required) => {
       </p>
 
       <div v-if="emailPasswordEnabled" class="space-y-5">
-        <form v-if="verifyingEmail" class="space-y-4" @submit.prevent="submit">
+        <form v-if="resetPasswordToken" class="space-y-4" @submit.prevent="submitPasswordReset">
+          <UInput
+            v-model="resetPassword"
+            autofocus
+            class="w-full"
+            icon="i-lucide-lock"
+            :placeholder="$t('auth.newPassword')"
+            size="md"
+            type="password"
+            variant="none"
+            :ui="inputUi"
+          />
+          <UInput
+            v-model="resetPasswordConfirm"
+            class="w-full"
+            icon="i-lucide-lock-keyhole"
+            :placeholder="$t('auth.passwordConfirm')"
+            size="md"
+            type="password"
+            variant="none"
+            :ui="inputUi"
+          />
+          <p v-if="resetPasswordConfirm && !resetPasswordsMatch" class="text-xs text-error">
+            {{ $t('auth.passwordMismatch') }}
+          </p>
+
+          <div class="grid gap-2 border-t border-default pt-4">
+            <UButton
+              type="submit"
+              color="primary"
+              variant="solid"
+              block
+              icon="i-lucide-key-round"
+              :loading="pending"
+              :disabled="!canResetPassword"
+            >
+              {{ $t('auth.setNewPassword') }}
+            </UButton>
+          </div>
+        </form>
+
+        <form v-else-if="verifyingEmail" class="space-y-4" @submit.prevent="submit">
           <UInput
             :model-value="verificationEmail"
             class="w-full"
@@ -377,7 +483,7 @@ watch(legalRequired, (required) => {
           </div>
         </form>
 
-        <div v-else class="grid grid-cols-2 rounded-lg bg-muted p-1">
+        <div v-else-if="mode !== 'forgot'" class="grid grid-cols-2 rounded-lg bg-muted p-1">
           <button
             v-for="tab in loginTabs"
             :key="tab.id"
@@ -391,7 +497,38 @@ watch(legalRequired, (required) => {
           </button>
         </div>
 
-        <form v-if="!verifyingEmail" class="space-y-4" @submit.prevent="submit">
+        <form v-if="!resetPasswordToken && mode === 'forgot'" class="space-y-4" @submit.prevent="requestPasswordReset">
+          <UInput
+            v-model="resetEmail"
+            autofocus
+            class="w-full"
+            icon="i-lucide-mail"
+            :placeholder="$t('auth.email')"
+            size="md"
+            type="email"
+            variant="none"
+            :ui="inputUi"
+          />
+
+          <div class="grid gap-2 border-t border-default pt-4">
+            <UButton
+              type="submit"
+              color="primary"
+              variant="solid"
+              block
+              icon="i-lucide-mail-check"
+              :loading="pending"
+              :disabled="!canRequestPasswordReset"
+            >
+              {{ $t('auth.sendPasswordReset') }}
+            </UButton>
+            <UButton type="button" color="neutral" variant="ghost" block @click="mode = 'login'">
+              {{ $t('common.back') }}
+            </UButton>
+          </div>
+        </form>
+
+        <form v-else-if="!verifyingEmail && !resetPasswordToken" class="space-y-4" @submit.prevent="submit">
           <UInput
             v-model="email"
             autofocus
@@ -430,7 +567,7 @@ watch(legalRequired, (required) => {
 
           <ArkAuthLegalLinks
             v-model:accepted="legalAccepted"
-            :mode="mode"
+            :mode="mode === 'register' ? 'register' : 'login'"
             @navigate="emit('navigate')"
             @update:required="legalRequired = $event"
           />
@@ -448,6 +585,9 @@ watch(legalRequired, (required) => {
             </UButton>
             <UButton v-if="showBack && mode === 'login'" type="button" color="neutral" variant="ghost" block to="/">
               {{ $t('common.back') }}
+            </UButton>
+            <UButton v-if="mode === 'login'" type="button" color="neutral" variant="ghost" block icon="i-lucide-circle-help" @click="startPasswordResetRequest">
+              {{ $t('auth.forgotPassword') }}
             </UButton>
           </div>
         </form>

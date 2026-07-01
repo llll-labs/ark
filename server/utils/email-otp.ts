@@ -84,6 +84,43 @@ export function emailOtpCopy(locale: EmailLocale, purpose: EmailOtpPurpose, otp:
   }
 }
 
+export function passwordResetLinkCopy(locale: EmailLocale, url: string) {
+  const safeUrl = escapeHtml(url)
+  if (locale === 'ru') {
+    return {
+      html: [
+        '<p>Мы получили запрос на сброс пароля.</p>',
+        `<p><a href="${safeUrl}">Задайте новый пароль</a>.</p>`,
+        '<p>Ссылка действует 1 час. Если вы не запрашивали сброс пароля, просто проигнорируйте письмо.</p>',
+      ].join(''),
+      subject: 'Сброс пароля',
+      text: [
+        'Мы получили запрос на сброс пароля.',
+        '',
+        `Задайте новый пароль: ${url}`,
+        '',
+        'Ссылка действует 1 час. Если вы не запрашивали сброс пароля, просто проигнорируйте письмо.',
+      ].join('\n'),
+    }
+  }
+
+  return {
+    html: [
+      '<p>We received a request to reset your password.</p>',
+      `<p><a href="${safeUrl}">Set a new password</a>.</p>`,
+      '<p>This link expires in 1 hour. If you did not request this, you can ignore this email.</p>',
+    ].join(''),
+    subject: 'Reset your password',
+    text: [
+      'We received a request to reset your password.',
+      '',
+      `Set a new password: ${url}`,
+      '',
+      'This link expires in 1 hour. If you did not request this, you can ignore this email.',
+    ].join('\n'),
+  }
+}
+
 export function generateEmailOtp() {
   return randomInt(0, 1_000_000).toString().padStart(6, '0')
 }

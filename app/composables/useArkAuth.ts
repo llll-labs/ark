@@ -97,6 +97,43 @@ export function useArkAuth() {
     }
   }
 
+  async function requestPasswordReset(email: string) {
+    error.value = null
+    try {
+      await $fetch('/api/auth/request-password-reset', {
+        body: {
+          email,
+          redirectTo: absoluteAuthUrl('/login'),
+        },
+        credentials: 'include',
+        headers: localeHeaders(),
+        method: 'POST',
+      })
+      return { sent: true }
+    }
+    catch (cause) {
+      error.value = authErrorMessage(cause, 'Password reset request failed')
+      throw new Error(error.value)
+    }
+  }
+
+  async function resetPassword(token: string, newPassword: string) {
+    error.value = null
+    try {
+      await $fetch('/api/auth/reset-password', {
+        body: { newPassword, token },
+        credentials: 'include',
+        headers: localeHeaders(),
+        method: 'POST',
+      })
+      return { reset: true }
+    }
+    catch (cause) {
+      error.value = authErrorMessage(cause, 'Password reset failed')
+      throw new Error(error.value)
+    }
+  }
+
   async function sendEmailVerificationOtp(email: string) {
     error.value = null
     try {
@@ -241,7 +278,9 @@ export function useArkAuth() {
     me,
     profile,
     register,
+    requestPasswordReset,
     resendEmailVerificationOtp,
+    resetPassword,
     user,
     verifyEmailOtp,
   }

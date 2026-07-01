@@ -19,7 +19,7 @@ import {
   telegramOAuthUserInfo,
 } from './telegram-oauth'
 import { sendEmail } from './email'
-import { emailOtpCopy, requestEmailLocale, type EmailOtpPurpose } from './email-otp'
+import { emailOtpCopy, passwordResetLinkCopy, requestEmailLocale, type EmailOtpPurpose } from './email-otp'
 import { uuidv7 } from './uuid'
 
 const appPort = process.env.PORT ?? '5400'
@@ -91,6 +91,16 @@ function trustedOrigins(request?: Request) {
   return origins
 }
 
+function publicAuthUrl(path: string) {
+  return new URL(path, configuredBaseOrigin || configuredBaseUrl).toString()
+}
+
+function passwordResetUrl(token: string) {
+  const url = new URL(publicAuthUrl('/login'))
+  url.searchParams.set('token', token)
+  return url.toString()
+}
+
 export const auth = betterAuth({
   advanced: {
     database: {
@@ -110,6 +120,17 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: true,
+    resetPasswordTokenExpiresIn: 3600,
+    revokeSessionsOnPasswordReset: true,
+    sendResetPassword: async ({ token, user }, request) => {
+      const copy = passwordResetLinkCopy(requestEmailLocale({ request }), passwordResetUrl(token))
+      void sendEmail({
+        to: user.email,
+        ...copy,
+      }).catch((error) => {
+        console.error('[ark] reset password email failed', error)
+      })
+    },
   },
   plugins: [
     emailOTP({
