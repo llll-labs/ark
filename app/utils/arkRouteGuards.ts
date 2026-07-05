@@ -55,6 +55,10 @@ function hasArkUser(subject: unknown) {
   return Boolean(settingsObject(subject).arkUser)
 }
 
+function redirectWithContext(nuxtApp: ReturnType<typeof useNuxtApp>, target: any) {
+  return nuxtApp.runWithContext(() => navigateTo(target, { replace: true }))
+}
+
 async function completeArkProfileIfNeeded(auth: ReturnType<typeof useArkAuth>, me: any) {
   if (!me?.authenticated || hasArkUser(me))
     return me
@@ -111,6 +115,7 @@ export async function runTelegramMiniAuthGuard(to: any) {
   if (to.path.startsWith('/api') || isTelegramMiniAutoAuthSuppressed() || !hasTelegramMiniLaunchParams())
     return
 
+  const nuxtApp = useNuxtApp()
   const pending = useState('ark-telegram-mini-auth-pending', () => false)
   if (pending.value)
     return
@@ -122,8 +127,7 @@ export async function runTelegramMiniAuthGuard(to: any) {
     if (me?.authenticated)
       return
 
-    const { $trpc } = useNuxtApp()
-    const settings = await $trpc.ark.settings.public.query().catch(() => null)
+    const settings = await nuxtApp.$trpc.ark.settings.public.query().catch(() => null)
     const authJson = settingsObject(settings?.authJson)
     if (!authJson.telegram_enabled)
       return
@@ -131,7 +135,7 @@ export async function runTelegramMiniAuthGuard(to: any) {
     const target = await authenticateTelegramMiniLaunch(to.query.redirect, to.path)
     const nextTarget = onboardingRedirectTarget(settings, auth.me.value, target) || target
     if (nextTarget && nextTarget !== to.fullPath)
-      return navigateTo(nextTarget, { replace: true })
+      return redirectWithContext(nuxtApp, nextTarget)
   }
   catch (error) {
     console.warn('[ark] Telegram Mini auto-auth failed', error)
@@ -145,12 +149,13 @@ export async function runArkAuthGuard(to: any) {
   if (to.path.startsWith('/api'))
     return
 
+  const nuxtApp = useNuxtApp()
   const auth = useArkAuth()
 
   if (to.path === '/login') {
     const me = await completeArkProfileIfNeeded(auth, await auth.check())
     if (me?.authenticated && hasArkUser(me))
-      return navigateTo(telegramMiniPostAuthTarget('/login', to.query.redirect), { replace: true })
+      return redirectWithContext(nuxtApp, telegramMiniPostAuthTarget('/login', to.query.redirect))
     return
   }
 
@@ -159,16 +164,16 @@ export async function runArkAuthGuard(to: any) {
 
   const me = await completeArkProfileIfNeeded(auth, await auth.check())
   if (!me?.authenticated) {
-    return navigateTo({
+    return redirectWithContext(nuxtApp, {
       path: '/login',
       query: { redirect: to.fullPath },
-    }, { replace: true })
+    })
   }
   if (!hasArkUser(me)) {
-    return navigateTo({
+    return redirectWithContext(nuxtApp, {
       path: '/login',
       query: { redirect: to.fullPath },
-    }, { replace: true })
+    })
   }
 }
 
@@ -179,6 +184,7 @@ export async function runArkOnboardingGuard(to: any) {
   if (!isArkAppRoute(to.path) && to.path !== '/onboarding')
     return
 
+  const nuxtApp = useNuxtApp()
   const auth = useArkAuth()
   const me = await completeArkProfileIfNeeded(auth, auth.checked.value ? auth.me.value : await auth.check())
   if (!me?.authenticated)
@@ -186,12 +192,11 @@ export async function runArkOnboardingGuard(to: any) {
   if (!hasArkUser(me))
     return
 
-  const { $trpc } = useNuxtApp()
-  const settings = await $trpc.ark.settings.public.query().catch(() => null)
+  const settings = await nuxtApp.$trpc.ark.settings.public.query().catch(() => null)
   if (to.path === '/onboarding')
     return
 
   const target = onboardingRedirectTarget(settings, me, to.fullPath)
   if (target)
-    return navigateTo(target, { replace: true })
+    return redirectWithContext(nuxtApp, target)
 }
