@@ -61,7 +61,7 @@ function devPublicUrl() {
 
 function devHmrConfig() {
   const publicUrl = devPublicUrl()
-  const hmrHost = process.env.VITE_HMR_HOST || process.env.NUXT_HMR_HOST || publicUrl?.hostname
+  const hmrHost = process.env.VITE_HMR_HOST || process.env.NUXT_HMR_HOST
   const hmrProtocol = process.env.VITE_HMR_PROTOCOL || process.env.NUXT_HMR_PROTOCOL
   const serverPort = devPort(process.env.VITE_HMR_PORT || process.env.NUXT_HMR_PORT)
   const clientPort = devPort(process.env.VITE_HMR_CLIENT_PORT || process.env.NUXT_HMR_CLIENT_PORT)

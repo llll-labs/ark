@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { copyFileSync, mkdirSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,7 +18,7 @@ async function main() {
   }
 
   if (command === 'dev') {
-    dev(args)
+    await dev(args)
     return
   }
 
@@ -114,17 +114,20 @@ function envWithDotenv(baseEnv = process.env) {
   return env
 }
 
-function envWithPortCell(baseEnv = process.env, options = {}) {
+export function envWithPortCell(baseEnv = process.env, options = {}) {
   const env = envWithDotenv(baseEnv)
   if (options.port)
     env.PORT = String(options.port)
 
   const port = parsePort(env.PORT || '5400')
+  const root = findWorkspaceRoot(process.cwd())
 
   env.PORT ||= String(port)
   env.POSTGRES_PORT ||= String(port + 1)
   env.RUSTFS_PORT ||= String(port + 2)
   env.RUSTFS_CONSOLE_PORT ||= String(port + 3)
+  env.DB_DATA_DIR ||= resolve(root, '.ark', String(port), 'database')
+  env.STORAGE_LOCAL_ROOT ||= resolve(root, '.ark', String(port), 'uploads')
 
   return { env, port }
 }
@@ -146,23 +149,277 @@ function run(command, args, options = {}) {
   return result
 }
 
-function dev(args) {
+async function dev(args) {
   const baseEnv = envWithDotenv(process.env)
   const port = parsePort(args.port ?? baseEnv.PORT ?? 5400)
   const host = String(args.host ?? baseEnv.HOST ?? '127.0.0.1')
+  const localOrigin = `http://127.0.0.1:${port}`
+  const postgresConfig = resolveDevPostgresConfig(baseEnv, { pgprefix: args.pgprefix, port })
+  const env = composeDevEnv({
+    args,
+    baseEnv: postgresConfig ? devPostgresEnv(baseEnv, postgresConfig) : baseEnv,
+    host,
+    localOrigin,
+    port,
+  })
+
+  if (postgresConfig)
+    await ensureDevPostgresDatabase(postgresConfig, { reset: Boolean(args.reset) })
+  else if (args.reset)
+    resetPortCell(findWorkspaceRoot(process.cwd()), port)
+
+  console.log(`Ark local origin: ${localOrigin}`)
+  console.log(`Ark public origin: ${env.BETTER_AUTH_URL}`)
+
+  if (!args['skip-migrate'])
+    db({ ...args, _: ['db', 'migrate'] }, env)
+
+  if (!args['skip-setup'])
+    runTenantSetup(env)
+
+  if (args['setup-only']) {
+    console.log('Ark dev setup is ready.')
+    return
+  }
+
+  run('pnpm', ['exec', 'nuxt', 'dev', '--host', host, '--port', String(port)], { env })
+}
+
+export function composeDevEnv(options) {
+  const { args, baseEnv, host, localOrigin, port } = options
+  const publicUrl = String(options.publicUrl || args['public-url'] || baseEnv.BETTER_AUTH_URL || localOrigin).replace(/\/+$/, '')
+  const publicHost = hostnameFromOrigin(publicUrl)
+  const localOrigins = [
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+  ]
+  const trustedOrigins = unique([
+    publicUrl,
+    ...localOrigins,
+    ...splitList(baseEnv.BETTER_AUTH_TRUSTED_ORIGINS),
+  ])
+  const allowedHosts = unique([
+    ...splitList(baseEnv.VITE_ALLOWED_HOSTS),
+    publicHost,
+  ])
   const env = {
     ...baseEnv,
     HOST: host,
     NUXT_IGNORE_LOCK: '1',
     PORT: String(port),
-    VITE_HMR_PORT: String(parsePort(baseEnv.VITE_HMR_PORT ?? baseEnv.NUXT_HMR_PORT ?? port + 10000)),
+    BETTER_AUTH_URL: publicUrl,
+    BETTER_AUTH_TRUSTED_ORIGINS: trustedOrigins.join(','),
+    NUXT_PUBLIC_SITE_URL: baseEnv.NUXT_PUBLIC_SITE_URL || publicUrl,
+    VITE_HMR_ORIGIN: baseEnv.VITE_HMR_ORIGIN || baseEnv.NUXT_HMR_ORIGIN || publicUrl,
   }
-  env.NUXT_HMR_PORT ||= env.VITE_HMR_PORT
 
-  if (!args['skip-migrate'])
-    run('pnpm', ['db:migrate'], { env })
+  if (allowedHosts.length)
+    env.VITE_ALLOWED_HOSTS = allowedHosts.join(',')
+  if (baseEnv.VITE_HMR_HOST || baseEnv.NUXT_HMR_HOST)
+    env.VITE_HMR_HOST = baseEnv.VITE_HMR_HOST || baseEnv.NUXT_HMR_HOST
+  if (baseEnv.VITE_HMR_PORT || baseEnv.NUXT_HMR_PORT) {
+    env.VITE_HMR_PORT = String(parsePort(baseEnv.VITE_HMR_PORT || baseEnv.NUXT_HMR_PORT))
+    env.NUXT_HMR_PORT = env.VITE_HMR_PORT
+  }
+  if (baseEnv.VITE_HMR_CLIENT_PORT || baseEnv.NUXT_HMR_CLIENT_PORT) {
+    env.VITE_HMR_CLIENT_PORT = String(parsePort(baseEnv.VITE_HMR_CLIENT_PORT || baseEnv.NUXT_HMR_CLIENT_PORT))
+  }
+  else if (publicUrl.startsWith('https://')) {
+    env.VITE_HMR_CLIENT_PORT = '443'
+  }
+  if (baseEnv.VITE_HMR_PROTOCOL || baseEnv.NUXT_HMR_PROTOCOL)
+    env.VITE_HMR_PROTOCOL = baseEnv.VITE_HMR_PROTOCOL || baseEnv.NUXT_HMR_PROTOCOL
+  else if (publicUrl.startsWith('https://'))
+    env.VITE_HMR_PROTOCOL = 'wss'
 
-  run('pnpm', ['exec', 'nuxt', 'dev', '--host', host, '--port', String(port)], { env })
+  return env
+}
+
+export function resolveDevPostgresConfig(env, options = {}) {
+  const rawPrefix = options.pgprefix === true ? env.DATABASE_PREFIX : (options.pgprefix ?? env.DATABASE_PREFIX)
+  const prefix = String(rawPrefix ?? '').trim()
+  if (!prefix && options.pgprefix === true)
+    throw new Error('DATABASE_PREFIX is required when --pgprefix is passed without a value.')
+  if (!prefix)
+    return null
+  if (!/^[a-z][a-z0-9_]*$/.test(prefix))
+    throw new Error(`Invalid database prefix: ${prefix}`)
+
+  const sourceValue = String(env.DATABASE_URL || '').trim()
+  if (!sourceValue)
+    throw new Error('DATABASE_URL is required when --pgprefix or DATABASE_PREFIX is set.')
+
+  const sourceUrl = parsePostgresUrl(sourceValue, 'DATABASE_URL')
+  const port = parsePort(options.port ?? env.PORT ?? 5400)
+  const sourceDatabase = databaseNameFromUrl(sourceUrl)
+  const targetDatabase = `${prefix}_${port}`
+
+  assertSafeDevDatabaseName(targetDatabase)
+  if (sourceDatabase === targetDatabase)
+    throw new Error(`Refusing to target source database ${targetDatabase}.`)
+
+  const runtimeUrl = new URL(sourceUrl)
+  runtimeUrl.pathname = `/${encodeURIComponent(targetDatabase)}`
+
+  return {
+    host: sourceUrl.host,
+    port,
+    prefix,
+    sourceDatabase,
+    sourceUrl: sourceUrl.toString(),
+    targetDatabase,
+    runtimeUrl: runtimeUrl.toString(),
+  }
+}
+
+export function devPostgresEnv(baseEnv, config) {
+  return {
+    ...baseEnv,
+    DB_CLIENT: 'postgres',
+    DATABASE_URL: config.runtimeUrl,
+    DATABASE_PREFIX: config.prefix,
+    PORT: String(config.port),
+  }
+}
+
+function parsePostgresUrl(value, name) {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:')
+      throw new Error('unsupported protocol')
+    return url
+  }
+  catch {
+    throw new Error(`${name} must be a valid postgres:// or postgresql:// URL.`)
+  }
+}
+
+function databaseNameFromUrl(url) {
+  return decodeURIComponent(url.pathname.replace(/^\/+/, ''))
+}
+
+function assertSafeDevDatabaseName(value) {
+  if (!/^[a-z][a-z0-9_]*_\d+$/.test(value))
+    throw new Error(`Refusing unsafe dev database name: ${value}`)
+}
+
+async function ensureDevPostgresDatabase(config, options = {}) {
+  const postgres = (await import('postgres')).default
+  const sql = postgres(config.sourceUrl, {
+    max: 1,
+    idle_timeout: 1,
+    connect_timeout: 10,
+  })
+
+  try {
+    if (options.reset)
+      await resetDevPostgresDatabase(sql, config.targetDatabase)
+
+    const existing = await sql`
+      select 1
+      from pg_database
+      where datname = ${config.targetDatabase}
+      limit 1
+    `
+
+    if (existing.length) {
+      console.log(`Database already exists: ${config.targetDatabase}`)
+      return
+    }
+
+    await sql.unsafe(`create database ${quoteIdentifier(config.targetDatabase)}`)
+    console.log(`Created database: ${config.targetDatabase}`)
+  }
+  finally {
+    await sql.end({ timeout: 5 })
+  }
+}
+
+async function resetDevPostgresDatabase(sql, targetDatabase) {
+  console.log(`Resetting database: ${targetDatabase}`)
+  await sql`
+    select pg_terminate_backend(pid)
+    from pg_stat_activity
+    where datname = ${targetDatabase}
+      and pid <> pg_backend_pid()
+  `
+  await sql.unsafe(`drop database if exists ${quoteIdentifier(targetDatabase)}`)
+}
+
+function quoteIdentifier(value) {
+  assertSafeDevDatabaseName(value)
+  return `"${value.replaceAll('"', '""')}"`
+}
+
+export function resetPortCell(root, port) {
+  const dataDir = resolve(root, '.ark', String(port))
+  rmSync(dataDir, { force: true, recursive: true })
+  console.log(`Removed ${dataDir}`)
+}
+
+function runTenantSetup(env) {
+  const commands = tenantSetupCommands(process.cwd())
+  for (const command of commands) {
+    console.log(`\nTenant setup: ${command}`)
+    runShell(command, { env: envWithLocalBin(env) })
+  }
+}
+
+export function tenantSetupCommands(root) {
+  const pkg = readPackageJson(root)
+  const setup = pkg.ark?.dev?.setup
+  if (!setup)
+    return []
+  if (Array.isArray(setup))
+    return setup.map(String).filter(Boolean)
+  if (typeof setup === 'string' && setup.trim())
+    return [setup.trim()]
+  throw new Error('package.json ark.dev.setup must be a command string or an array of command strings')
+}
+
+function readPackageJson(root) {
+  const path = resolve(root, 'package.json')
+  if (!existsSync(path))
+    return {}
+  return JSON.parse(readFileSync(path, 'utf8'))
+}
+
+function runShell(command, options = {}) {
+  const result = spawnSync(command, {
+    cwd: options.cwd,
+    env: options.env ?? process.env,
+    shell: true,
+    stdio: options.stdio ?? 'inherit',
+  })
+  if (result.status !== 0)
+    process.exit(result.status ?? 1)
+}
+
+function envWithLocalBin(env) {
+  return {
+    ...env,
+    PATH: [resolve(process.cwd(), 'node_modules', '.bin'), env.PATH].filter(Boolean).join(':'),
+  }
+}
+
+function splitList(value) {
+  return String(value || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))]
+}
+
+function hostnameFromOrigin(origin) {
+  try {
+    return new URL(origin).hostname
+  }
+  catch {
+    return ''
+  }
 }
 
 function status() {
@@ -291,23 +548,23 @@ function worktree(args) {
   console.log(`  pnpm dev -- --port ${port}`)
 }
 
-function db(args) {
+function db(args, baseEnv = process.env) {
   const subcommand = args._[1]
   if (subcommand === 'migrate-core') {
-    const { env } = envWithPortCell(process.env, { port: args.port })
+    const { env } = envWithPortCell(baseEnv, { port: args.port })
     run('pnpm', ['--dir', arkRoot, 'exec', 'drizzle-kit', 'migrate'], { env })
     return
   }
 
   if (subcommand === 'migrate-app') {
-    const { env } = envWithPortCell(process.env, { port: args.port })
-    run('drizzle-kit', ['migrate'], { env })
+    const { env } = envWithPortCell(baseEnv, { port: args.port })
+    run('pnpm', ['exec', 'drizzle-kit', 'migrate'], { env })
     return
   }
 
   if (subcommand === 'migrate') {
-    db({ ...args, _: ['db', 'migrate-core'] })
-    db({ ...args, _: ['db', 'migrate-app'] })
+    db({ ...args, _: ['db', 'migrate-core'] }, baseEnv)
+    db({ ...args, _: ['db', 'migrate-app'] }, baseEnv)
     return
   }
 
@@ -442,7 +699,8 @@ function shellQuote(value) {
 
 function printHelp() {
   console.log(`Usage:
-  ark dev --port 5412 [--host 127.0.0.1] [--skip-migrate]
+  ark dev --port 5412 [--host 127.0.0.1] [--public-url https://p5412-dev.example.test]
+  ark dev --port 5412 --pgprefix app_dev [--reset]
   ark status
   ark kill [--dry-run]
   ark port-cell <command> [...args]
@@ -453,7 +711,20 @@ function printHelp() {
   ark path [...segments]`)
 }
 
-main().catch((error) => {
+function shouldRunMain() {
+  if (!process.argv[1])
+    return false
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+  }
+  catch {
+    return false
+  }
+}
+
+if (shouldRunMain()) {
+  main().catch((error) => {
   console.error(error instanceof Error ? error.message : error)
   process.exit(1)
-})
+  })
+}

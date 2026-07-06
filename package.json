@@ -91,6 +91,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "preflight": "node scripts/ark.mjs preflight",
+    "test": "node --test scripts/*.test.mjs",
     "typecheck": "nuxi prepare && vue-tsc --noEmit -p tsconfig.nuxt.json && pnpm run typecheck:scripts",
     "typecheck:scripts": "tsc --ignoreConfig --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --types node --skipLibCheck scripts/*.ts"
   },
