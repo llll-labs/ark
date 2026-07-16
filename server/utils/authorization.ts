@@ -4,6 +4,8 @@ import { hashPassword } from 'better-auth/crypto'
 import { and, eq, inArray, isNull, or } from 'drizzle-orm'
 import { createError } from 'h3'
 import { ensureDefaultPermissionRoles } from '../domain/permissions'
+import { registerCoreArkResources } from '../resources/core'
+import { createArkResourceServices, systemArkResourceAccountability } from '../resources/service'
 import {
   ensureArkUser as ensureDomainArkUser,
   ensureArkUserPersonalSpace as ensureDomainArkUserPersonalSpace,
@@ -124,6 +126,14 @@ function requestAuthForSession(session: Session) {
 
 const operatorRoleKeys = new Set(['admin', 'owner'])
 
+function coreDomainServices(db: ReturnType<typeof useDatabase>, spaceId: null | string = null) {
+  return createArkResourceServices({
+    accountability: { ...systemArkResourceAccountability(), spaceId },
+    authorization: 'domain',
+    database: db,
+  })
+}
+
 function adminCredentials() {
   const email = String(process.env.ADMIN_EMAIL ?? '').trim().toLowerCase()
   const password = String(process.env.ADMIN_PASSWORD ?? '').trim()
@@ -167,9 +177,10 @@ export async function ensureDefaultChannelCategory(spaceId: string) {
 
 async function ensureDefaultChannels(rootSpaceId: string) {
   const db = useDatabase()
+  const channels = coreDomainServices(db, rootSpaceId).resource('ark.channels')
   const generalCategory = await ensureDefaultChannelCategory(rootSpaceId)
 
-  await db.insert(arkChannels).values([
+  for (const values of [
     {
       kind: 'chat',
       name: 'general',
@@ -195,34 +206,51 @@ async function ensureDefaultChannels(rootSpaceId: string) {
       topic: 'Marketplace forum',
       visibility: 'registered',
     },
-  ]).onConflictDoNothing()
+  ] as const) {
+    const [existing] = await db.select().from(arkChannels).where(and(
+      eq(arkChannels.spaceId, rootSpaceId),
+      eq(arkChannels.slug, values.slug),
+      isNull(arkChannels.deletedAt),
+    )).limit(1)
+    if (!existing)
+      await channels.create(values)
+  }
 
-  await db.update(arkChannels).set({
-    topic: 'Logged-in marketplace discussion',
-    updatedAt: new Date(),
-    visibility: 'registered',
-  }).where(and(
+  const [general] = await db.select().from(arkChannels).where(and(
     eq(arkChannels.spaceId, rootSpaceId),
     eq(arkChannels.slug, 'general'),
-  ))
-  await db.update(arkChannels).set({
-    categoryId: generalCategory?.id,
-    topic: 'Marketplace forum',
-    updatedAt: new Date(),
-    visibility: 'registered',
-  }).where(and(
+  )).limit(1)
+  if (general) {
+    await channels.update(general.id, {
+      topic: 'Logged-in marketplace discussion',
+      updatedAt: new Date(),
+      visibility: 'registered',
+    })
+  }
+  const [forum] = await db.select().from(arkChannels).where(and(
     eq(arkChannels.spaceId, rootSpaceId),
     eq(arkChannels.slug, 'forum'),
-  ))
-  if (generalCategory) {
-    await db.update(arkChannels).set({
-      categoryId: generalCategory.id,
+  )).limit(1)
+  if (forum) {
+    await channels.update(forum.id, {
+      categoryId: generalCategory?.id,
+      topic: 'Marketplace forum',
       updatedAt: new Date(),
-    }).where(and(
+      visibility: 'registered',
+    })
+  }
+  if (generalCategory) {
+    const uncategorizedForums = await db.select().from(arkChannels).where(and(
       eq(arkChannels.spaceId, rootSpaceId),
       eq(arkChannels.kind, 'forum'),
       isNull(arkChannels.categoryId),
     ))
+    for (const channel of uncategorizedForums) {
+      await channels.update(channel.id, {
+        categoryId: generalCategory.id,
+        updatedAt: new Date(),
+      })
+    }
   }
 }
 
@@ -355,19 +383,18 @@ async function ensureConfiguredAdmin(rootSpaceId: string) {
     }).onConflictDoNothing()
   }
 
-  const [arkUser] = await db.insert(arkUsers).values({
-    authUserId: authUser.id,
-    displayName: credentials.name,
-    kind: 'human',
-    profileJson: { systemRole: 'admin' },
-  }).onConflictDoUpdate({
-    set: {
-      updatedAt: new Date(),
-    },
-    target: arkUsers.authUserId,
-  }).returning()
-  if (!arkUser)
-    throw new Error('Admin Ark user could not be created.')
+  const [existingArkUser] = await db.select().from(arkUsers).where(eq(arkUsers.authUserId, authUser.id)).limit(1)
+  const users = coreDomainServices(db, rootSpaceId).resource('ark.users')
+  const arkUser = (existingArkUser
+    ? await users.update(existingArkUser.id, { updatedAt: new Date() })
+    : await users.create({
+        authUserId: authUser.id,
+        displayName: credentials.name,
+        kind: 'human',
+        profileJson: { systemRole: 'admin' },
+      })) as ArkUserRow
+  if (arkUser.authUserId !== authUser.id)
+    throw new Error('Admin Ark user lifecycle changed its auth identity.')
 
   const [adminRole] = await db.select().from(arkRoles).where(and(
     eq(arkRoles.scopeType, 'space'),
@@ -490,6 +517,7 @@ export async function requireCurrentArkUser(event: H3Event, db: ReturnType<typeo
 }
 
 async function ensureDefaultArkUncached() {
+  registerCoreArkResources()
   const db = useDatabase()
 
   await db.insert(arkSettings).values(defaultArkSettingsValues()).onConflictDoNothing()
@@ -503,13 +531,13 @@ async function ensureDefaultArkUncached() {
   )).limit(1)
   if (existingRoot) {
     if (!existingRoot.isDefault || existingRoot.slug !== 'public' || existingRoot.name !== 'Public' || existingRoot.visibility !== 'registered') {
-      await db.update(arkSpaces).set({
+      await coreDomainServices(db, existingRoot.id).resource('ark.spaces').update(existingRoot.id, {
         isDefault: true,
         name: 'Public',
         slug: 'public',
         updatedAt: new Date(),
         visibility: 'registered',
-      }).where(eq(arkSpaces.id, existingRoot.id))
+      })
     }
     await ensureDefaultPermissionRoles(existingRoot.id)
     await ensureDefaultChannels(existingRoot.id)
@@ -518,23 +546,19 @@ async function ensureDefaultArkUncached() {
     return defaultArkIdentity()
   }
 
-  const insertedSpaces = await db.insert(arkSpaces).values([
-    {
-      inheritAccess: true,
-      isDefault: true,
-      kind: 'public_square',
-      name: 'Public',
-      slug: 'public',
-      visibility: 'registered',
-    },
-  ]).onConflictDoNothing().returning()
-
-  const root = insertedSpaces.find(space => space.slug === 'public')
-    ?? (await db.select().from(arkSpaces).where(and(
+  let root = (await db.select().from(arkSpaces).where(and(
       isNull(arkSpaces.deletedAt),
       isNull(arkSpaces.parentSpaceId),
       eq(arkSpaces.slug, 'public'),
     )).limit(1))[0]
+  root ??= await coreDomainServices(db).resource('ark.spaces').create({
+    inheritAccess: true,
+    isDefault: true,
+    kind: 'public_square',
+    name: 'Public',
+    slug: 'public',
+    visibility: 'registered',
+  }) as SpaceRow
   if (!root)
     return defaultArkIdentity()
 
@@ -569,6 +593,7 @@ export async function getDefaultArk() {
 }
 
 export async function ensureArkUser(authUser: AuthUser) {
+  registerCoreArkResources()
   const db = useDatabase()
   return ensureDomainArkUser(authUser, {
     db,

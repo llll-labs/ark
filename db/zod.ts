@@ -62,10 +62,10 @@ export type ArkCapability = z.infer<typeof arkCapabilitySchema>
 // core capabilities while accepting registered tenant ones.
 export type ArkCapabilityLike = ArkCapability | (string & {})
 
-// Shape check for capability actions (dot-separated lowercase segments).
+// Shape check for capability actions (dot-separated lowercase snake-case segments).
 // Whether an action is actually known (core or tenant-registered) is
 // enforced server-side via isKnownArkCapability().
-export const arkCapabilityActionPattern = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/
+export const arkCapabilityActionPattern = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/
 export const arkCapabilityActionSchema = z.string().min(3).max(80).regex(arkCapabilityActionPattern)
 
 export const scopeTypeSchema = z.enum(['global', 'space', 'channel', 'job', 'collection', 'item', 'page'])

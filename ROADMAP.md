@@ -41,11 +41,3 @@ Add machine authentication when an external integration requirement justifies de
 ### Origin and CSRF enforcement for Ark REST
 
 Apply trusted-origin and Fetch Metadata validation to cookie-authenticated `/api/ark/*` mutations when the REST security boundary is hardened. V1 leaves explicit CSRF checks to Better Auth's own `/api/auth/*` routes; Ark REST therefore relies on host-only `SameSite=Lax` session cookies, browser CORS behavior, and non-simple JSON requests, with multipart routes requiring separate review.
-
-## Migration
-
-### Remove tRPC
-
-Move input/output schemas and behavior out of tRPC routers, expose generic Resources and specialized Domain Operations through REST, migrate Ark UI and tenant consumers, then remove the tRPC endpoint, client plugin, router tree, and dependencies. Breaking existing Ark consumers is accepted as a pre-v1 migration cost.
-
-The chat migration must preserve its existing bidirectional `(createdAt, id)` keyset windows: latest, previous, next, and around-message loading; nullable opaque `prevCursor` and `nextCursor` without redundant availability flags; stable chronological response ordering; infinite scrolling in both directions; jump-to-message behavior; and client deduplication.

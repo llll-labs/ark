@@ -20,11 +20,14 @@ import {
 } from '../../../../db/schema'
 import { arkCapabilityValues } from '../../../../db/zod'
 import { isKnownArkCapability, loadArkAdminTableRegistrations, loadArkTenantCapabilities } from '../../../utils/app-extensions'
+import { adoptDiscoveredArkResource, discoverArkResourceTables } from '../../../resources/discovery'
+import { createArkResourceServices } from '../../../resources/service'
+import { listArkResources } from '../../../resources/registry'
 import {
   and,
   asc,
-  baseProcedure,
-  createTRPCRouter,
+  baseAction,
+  createArkActionRouter,
   desc,
   eq,
   getPublicSpace,
@@ -32,7 +35,7 @@ import {
   isNull,
   requireSpaceAccess,
   sql,
-  TRPCError,
+  ArkActionError,
   z,
 } from './shared'
 
@@ -61,11 +64,26 @@ function adminRegistrations() {
     tables.set(table.key, table)
   for (const table of loadArkAdminTableRegistrations())
     tables.set(table.key, table)
+  for (const resource of listArkResources()) {
+    if (resource.source !== 'adopted')
+      continue
+    tables.set(resource.name, {
+      description: `Adopted public.${resource.name} Resource`,
+      group: 'app',
+      icon: 'i-lucide-database',
+      key: resource.name,
+      label: resource.name,
+      primaryKey: resource.primaryKey,
+      table: resource.table,
+    })
+  }
   return tables
 }
 
 function serializeTable(registration: ArkAdminTableRegistration) {
+  const resource = resourceForTable(registration.table)
   return {
+    canDelete: !resource || resource.deletion !== 'disabled',
     description: registration.description,
     group: registration.group,
     icon: registration.icon,
@@ -87,7 +105,7 @@ interface ColumnMeta { dataType: string, enumValues?: string[], notNull: boolean
 function resolveRegistration(key: string): ArkAdminTableRegistration {
   const registration = adminRegistrations().get(key)
   if (!registration)
-    throw new TRPCError({ code: 'NOT_FOUND', message: `Unknown admin table: ${key}` })
+    throw new ArkActionError({ code: 'NOT_FOUND', message: `Unknown admin table: ${key}` })
   return registration
 }
 
@@ -137,8 +155,44 @@ function foreignKeysOf(table: any): Record<string, { tableKey: string | null, la
 async function requireAdmin(sessionOrCtx: any) {
   const root = sessionOrCtx?.auth ? await sessionOrCtx.auth.publicSpace() : await getPublicSpace()
   if (!root)
-    throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
-  await requireSpaceAccess(root.id, sessionOrCtx, 'settings.manage')
+    throw new ArkActionError({ code: 'NOT_FOUND', message: 'Public space not found' })
+  const access = await requireSpaceAccess(root.id, sessionOrCtx, 'settings.manage')
+  if (sessionOrCtx && typeof sessionOrCtx === 'object') {
+    sessionOrCtx.arkUser = access.arkUser ?? sessionOrCtx.arkUser
+    sessionOrCtx.adminCapabilities = access.capabilities
+  }
+  return { access, root }
+}
+
+function resourceForTable(table: any) {
+  return listArkResources().find(resource => resource.table === table) ?? null
+}
+
+function adminResourceServices(ctx: any, table: any, values: Record<string, unknown> = {}) {
+  const resource = resourceForTable(table)
+  if (!resource)
+    return null
+  const actorSpaceId = typeof values.spaceId === 'string'
+    ? values.spaceId
+    : typeof values.ownerSpaceId === 'string'
+      ? values.ownerSpaceId
+      : typeof values.parentSpaceId === 'string'
+        ? values.parentSpaceId
+        : null
+  return {
+    resource,
+    service: createArkResourceServices({
+      accountability: {
+        arkUserId: ctx.arkUser?.id ?? null,
+        capabilities: ctx.adminCapabilities ?? [],
+        spaceId: actorSpaceId,
+        system: true,
+        userId: ctx.session?.user?.id ?? null,
+      },
+      authorization: resource.source === 'code' ? 'domain' : 'resource',
+      database: ctx.db,
+    }).resource(resource.name),
+  }
 }
 
 // Coerce form values to the shapes Drizzle expects, dropping unknown/auto columns.
@@ -164,13 +218,37 @@ function sanitizeValues(cols: Record<string, ColumnMeta>, values: Record<string,
 
 const tableInput = z.object({ table: z.string().max(64) })
 
-export const adminRouter = createTRPCRouter({
-  tables: baseProcedure.query(async ({ ctx }) => {
+export const adminRouter = createArkActionRouter({
+  resources: baseAction.query(async ({ ctx }) => {
+    await requireAdmin(ctx)
+    return discoverArkResourceTables(ctx.db)
+  }),
+
+  adoptResource: baseAction
+    .input(z.object({
+      deletion: z.enum(['disabled', 'hard', 'soft']).default('disabled'),
+      name: z.string().min(1).max(80).regex(/^[a-z][a-z0-9_]*$/).optional(),
+      table: z.string().min(1).max(80).regex(/^[a-z][a-z0-9_]*$/),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await requireAdmin(ctx)
+      try {
+        return await adoptDiscoveredArkResource(input, ctx.db)
+      }
+      catch (error) {
+        throw new ArkActionError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Resource adoption failed.',
+        })
+      }
+    }),
+
+  tables: baseAction.query(async ({ ctx }) => {
     await requireAdmin(ctx)
     return [...adminRegistrations().values()].map(serializeTable)
   }),
 
-  rows: baseProcedure
+  rows: baseAction
     .input(z.object({
       table: z.string().max(64),
       limit: z.number().int().min(1).max(1000).default(25),
@@ -228,7 +306,7 @@ export const adminRouter = createTRPCRouter({
     }),
 
   // Relation-picker options for a whitelisted table: [{ id, label }].
-  options: baseProcedure
+  options: baseAction
     .input(tableInput)
     .query(async ({ ctx, input }) => {
       await requireAdmin(ctx)
@@ -248,7 +326,7 @@ export const adminRouter = createTRPCRouter({
       return rows.map(row => ({ id: row.id, label: String(row.label ?? row.id) }))
     }),
 
-  get: baseProcedure
+  get: baseAction
     .input(tableInput.extend({ id: z.string() }))
     .query(async ({ ctx, input }) => {
       await requireAdmin(ctx)
@@ -258,16 +336,20 @@ export const adminRouter = createTRPCRouter({
       return row ?? null
     }),
 
-  create: baseProcedure
+  create: baseAction
     .input(tableInput.extend({ values: z.record(z.string(), z.unknown()) }))
     .mutation(async ({ ctx, input }) => {
       await requireAdmin(ctx)
       const table = resolveTable(input.table)
-      const inserted = await ctx.db.insert(table).values(sanitizeValues(columnsOf(table), input.values)).returning() as any[]
+      const values = sanitizeValues(columnsOf(table), input.values)
+      const registered = adminResourceServices(ctx, table, values)
+      if (registered)
+        return registered.service.create(values)
+      const inserted = await ctx.db.insert(table).values(values).returning() as any[]
       return inserted[0]
     }),
 
-  update: baseProcedure
+  update: baseAction
     .input(tableInput.extend({ id: z.string(), values: z.record(z.string(), z.unknown()) }))
     .mutation(async ({ ctx, input }) => {
       await requireAdmin(ctx)
@@ -277,20 +359,30 @@ export const adminRouter = createTRPCRouter({
       const patch = sanitizeValues(cols, input.values)
       if ('updatedAt' in cols)
         patch.updatedAt = new Date()
+      const [existing] = await ctx.db.select().from(table).where(eq(table[primaryKeyOf(registration)], input.id)).limit(1) as any[]
+      const registered = adminResourceServices(ctx, table, existing ?? patch)
+      if (registered)
+        return registered.service.update(input.id, patch)
       const updated = await ctx.db.update(table).set(patch).where(eq(table[primaryKeyOf(registration)], input.id)).returning() as any[]
       if (!updated[0])
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Row not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Row not found' })
       return updated[0]
     }),
 
   // Soft-delete when the table has deletedAt; hard delete otherwise.
-  remove: baseProcedure
+  remove: baseAction
     .input(tableInput.extend({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await requireAdmin(ctx)
       const registration = resolveRegistration(input.table)
       const table = registration.table as any
       const cols = columnsOf(table)
+      const [existing] = await ctx.db.select().from(table).where(eq(table[primaryKeyOf(registration)], input.id)).limit(1) as any[]
+      const registered = adminResourceServices(ctx, table, existing ?? {})
+      if (registered) {
+        await registered.service.delete(input.id)
+        return { ok: true, soft: registered.resource.deletion === 'soft' }
+      }
       if ('deletedAt' in cols)
         await ctx.db.update(table).set({ deletedAt: new Date() }).where(eq(table[primaryKeyOf(registration)], input.id))
       else
@@ -299,11 +391,11 @@ export const adminRouter = createTRPCRouter({
     }),
 
   // Permissions matrix: roles × capabilities, backed by ark_grants on the root space.
-  permissions: baseProcedure.query(async ({ ctx }) => {
+  permissions: baseAction.query(async ({ ctx }) => {
     await requireAdmin(ctx)
     const root = await ctx.auth.publicSpace()
     if (!root)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
+      throw new ArkActionError({ code: 'NOT_FOUND', message: 'Public space not found' })
     const roleRows = await ctx.db
       .select({ id: arkRoles.id, key: arkRoles.key, name: arkRoles.name, rank: arkRoles.rank, isSystem: arkRoles.isSystem })
       .from(arkRoles)
@@ -329,15 +421,15 @@ export const adminRouter = createTRPCRouter({
     return { roles: roleRows, capabilities: [...new Set([...arkCapabilityValues as readonly string[], ...loadArkTenantCapabilities()])], grants: byRole }
   }),
 
-  setGrant: baseProcedure
+  setGrant: baseAction
     .input(z.object({ roleId: z.string(), capability: z.string().max(80), allow: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       await requireAdmin(ctx)
       const root = await ctx.auth.publicSpace()
       if (!root)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Public space not found' })
       if (!isKnownArkCapability(input.capability))
-        throw new TRPCError({ code: 'BAD_REQUEST', message: `Unknown capability: ${input.capability}` })
+        throw new ArkActionError({ code: 'BAD_REQUEST', message: `Unknown capability: ${input.capability}` })
       const match = and(
         eq(arkGrants.scopeType, 'space'),
         eq(arkGrants.scopeId, root.id),

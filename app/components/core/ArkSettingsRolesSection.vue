@@ -6,7 +6,7 @@ const props = defineProps<{
 }>()
 const selectedSpaceId = defineModel<string>('selectedSpaceId', { default: '' })
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const { t } = useI18n()
 const { pending: saving, error: errorMessage, success: successMessage, run } = useAsyncAction()
 const createRoleOpen = ref(false)
@@ -27,8 +27,8 @@ const roleForm = reactive({
 
 const { data, refresh } = await useAsyncData('ark-roles-section', async () => {
   const [allRoles, allSpaces] = await Promise.all([
-    $trpc.ark.roles.list.query({}).catch(() => []),
-    $trpc.ark.spaces.list.query({}).catch(() => []),
+    $arkApi.query("roles.list", {}).catch(() => []),
+    $arkApi.query("spaces.list", {}).catch(() => []),
   ])
   return { roles: allRoles as any[], spaces: allSpaces as any[] }
 }, { default: () => ({ roles: [], spaces: [] }) })
@@ -55,7 +55,7 @@ async function createRole() {
   if (!roleForm.name.trim())
     return
   await run(async () => {
-    await $trpc.ark.roles.create.mutate({
+    await $arkApi.mutate("roles.create", {
       description: roleForm.description || null,
       key: roleForm.key || slugify(roleForm.name),
       name: roleForm.name.trim(),

@@ -12,7 +12,7 @@ definePageMeta({
 // is purely Заказы/Вакансии browsing with friendly filters + sorting.
 const access = await useArkCapabilityGate('market.access')
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const { t } = useI18n()
 
 const canCreate = computed(() => access.value?.capabilities.includes('market.jobs.create') ?? false)
@@ -44,7 +44,7 @@ const {
 })
 
 const { data: meta } = await useAsyncData('ark-market-meta', () =>
-  $trpc.ark.market.options.query({}).catch(() => ({ categories: [], skills: [], sources: [], styles: [], tags: [], tools: [] })))
+  $arkApi.query("market.options", {}).catch(() => ({ categories: [], skills: [], sources: [], styles: [], tags: [], tools: [] })))
 
 const options = computed(() => meta.value ?? { categories: [], skills: [], sources: [], styles: [], tags: [], tools: [] })
 const categoryOptions = computed(() => options.value.categories ?? [])

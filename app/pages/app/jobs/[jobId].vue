@@ -11,11 +11,11 @@ definePageMeta({
 await useArkCapabilityGate('market.access')
 
 const route = useRoute()
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const jobId = computed(() => String(route.params.jobId))
 
 const { data, refresh } = await useAsyncData(`ark-job-${jobId.value}`, async () => {
-  const job = await $trpc.ark.market.jobs.byId.query({ id: jobId.value }).catch(() => null)
+  const job = await $arkApi.query("market.jobs.byId", { id: jobId.value }).catch(() => null)
   return { job }
 })
 

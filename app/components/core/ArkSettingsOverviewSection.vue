@@ -6,7 +6,7 @@ const props = defineProps<{
   reloadSignal?: number
 }>()
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const { t } = useI18n()
 const { pending: saving, error: errorMessage, success: successMessage, run } = useAsyncAction()
 
@@ -68,7 +68,7 @@ function fillSettingsForm(row: any) {
 }
 
 const { refresh } = await useAsyncData('ark-settings-overview', async () => {
-  const row = await $trpc.ark.settings.admin.query().catch(() => $trpc.ark.settings.public.query())
+  const row = await $arkApi.query('settings.admin').catch(() => $arkApi.query('settings.public'))
   fillSettingsForm(row)
   return row
 })
@@ -99,7 +99,7 @@ async function saveCoreSettings() {
       default_route: settingsForm.portalDefaultRoute || '/',
       public_root_unscoped: settingsForm.portalPublicRootUnscoped,
     }
-    const updated = await $trpc.ark.settings.update.mutate({
+    const updated = await $arkApi.mutate("settings.update", {
       accentColor: settingsForm.accentColor,
       authJson,
       dataJson: parseJsonField('Stored app metadata', settingsForm.dataJson),

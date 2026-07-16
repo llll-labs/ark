@@ -1,11 +1,12 @@
 import { Buffer } from 'node:buffer'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   PutObjectCommand,
@@ -271,6 +272,18 @@ export async function putStoredObject(location: ArkStorageLocation, path: string
     Bucket: location.bucket,
     ContentLength: body.length,
     ContentType: contentType,
+    Key: path,
+  }))
+}
+
+export async function deleteStoredObject(location: ArkStorageLocation, path: string) {
+  if (location.driver === 'local') {
+    await rm(localObjectPath(location, path), { force: true })
+    return
+  }
+
+  await s3Client(location).send(new DeleteObjectCommand({
+    Bucket: location.bucket,
     Key: path,
   }))
 }

@@ -5,9 +5,10 @@ import ArkAdminTable from './ArkAdminTable.vue'
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 
-const tab = ref<'data' | 'views'>('data')
+const tab = ref<'data' | 'resources' | 'views'>('data')
+const adopting = ref('')
 const selectedTable = ref(typeof route.query.table === 'string' && route.query.table !== 'permissions' ? route.query.table : '')
 
 interface AdminTableMeta {
@@ -18,7 +19,8 @@ interface AdminTableMeta {
   label: string
 }
 
-const { data: registry } = await useAsyncData('ark-admin-tables', () => $trpc.ark.admin.tables.query())
+const { data: registry } = await useAsyncData('ark-admin-tables', () => $arkApi.query('admin.tables'))
+const { data: resources, refresh: refreshResources } = await useAsyncData('ark-resource-discovery', () => $arkApi.query('admin.resources'))
 const availableTables = computed<AdminTableMeta[]>(() => (registry.value ?? []) as AdminTableMeta[])
 const availableTableKeys = computed(() => new Set(availableTables.value.map(table => table.key)))
 
@@ -60,6 +62,22 @@ function selectViewsTab() {
   replaceContentQuery(undefined)
 }
 
+function selectResourcesTab() {
+  tab.value = 'resources'
+  replaceContentQuery(undefined)
+}
+
+async function adoptResource(table: string) {
+  adopting.value = table
+  try {
+    await $arkApi.mutate('admin.adoptResource', { deletion: 'disabled', table })
+    await Promise.all([refreshResources(), refreshNuxtData('ark-admin-tables')])
+  }
+  finally {
+    adopting.value = ''
+  }
+}
+
 function replaceContentQuery(table?: string) {
   const query: LocationQueryRaw = { ...route.query, section: 'content' }
   if (table)
@@ -74,6 +92,14 @@ function replaceContentQuery(table?: string) {
   <div class="flex h-full min-h-0 flex-col bg-default">
     <div class="shrink-0 border-b border-default bg-default/95 px-2 py-1.5">
       <nav class="flex min-w-0 items-center gap-1">
+        <button
+          type="button"
+          class="inline-flex h-8 items-center gap-1.5 rounded px-2.5 text-sm font-semibold transition"
+          :class="tab === 'resources' ? 'bg-white/10 text-highlighted' : 'text-muted hover:bg-white/[0.06] hover:text-default'"
+          @click="selectResourcesTab"
+        >
+          {{ $t('admin.tabs.resources') }}
+        </button>
         <button
           type="button"
           class="inline-flex h-8 items-center gap-1.5 rounded px-2.5 text-sm font-semibold transition"
@@ -99,6 +125,37 @@ function replaceContentQuery(table?: string) {
         <p class="mt-2 text-sm">
           {{ $t('admin.viewsComingSoon') }}
         </p>
+      </div>
+    </div>
+
+    <div v-else-if="tab === 'resources'" class="ark-scrollbar min-h-0 flex-1 overflow-y-auto p-4 lg:p-6">
+      <div class="mx-auto grid max-w-4xl gap-3">
+        <div>
+          <h2 class="font-semibold text-highlighted">{{ $t('admin.resourcesTitle') }}</h2>
+          <p class="mt-1 text-sm text-muted">{{ $t('admin.resourcesHint') }}</p>
+        </div>
+        <div
+          v-for="resource in resources ?? []"
+          :key="resource.table"
+          class="flex items-center justify-between gap-4 rounded-lg border border-default bg-elevated p-4"
+        >
+          <div class="min-w-0">
+            <div class="truncate font-semibold text-highlighted">public.{{ resource.table }}</div>
+            <div class="mt-1 text-xs text-muted">
+              {{ resource.primaryKey ? $t('admin.resourcePrimaryKey', { field: resource.primaryKey }) : $t('admin.resourceNoPrimaryKey') }}
+            </div>
+          </div>
+          <UBadge v-if="resource.adopted" color="success" variant="subtle">{{ $t('admin.resourceAdopted') }}</UBadge>
+          <UButton
+            v-else
+            :disabled="!resource.eligible"
+            :loading="adopting === resource.table"
+            icon="i-lucide-circle-plus"
+            @click="adoptResource(resource.table)"
+          >
+            {{ $t('admin.resourceAdopt') }}
+          </UButton>
+        </div>
       </div>
     </div>
 

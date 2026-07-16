@@ -3,7 +3,7 @@ import type {
 } from '../../../../db/schema'
 import type { ArkCapability, ArkCapabilityLike } from '../../../../db/zod'
 import type { RequestAuthContext } from '../../../utils/authorization'
-import { TRPCError } from '@trpc/server'
+import { ArkActionError } from '../../init'
 import { and, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm'
 import { z } from 'zod/v4'
 import {
@@ -52,7 +52,7 @@ function contextObject(subject: unknown) {
 
 // Re-export the shared surface so domain router files import everything from
 // `./shared` instead of reaching back across the tree for tables, zod schemas,
-// drizzle operators, auth utils, and tRPC procedures.
+// drizzle operators, auth utils, and transport-neutral Ark Actions.
 export type { ArkCapability, ArkCapabilityLike }
 export {
   arkSettings,
@@ -139,8 +139,7 @@ export {
   virtualArk,
 } from '../../../utils/authorization'
 export { publishChatEvent } from '../../../utils/realtime'
-export { arkUserProcedure, baseProcedure, createTRPCRouter, protectedProcedure } from '../../init'
-export { TRPCError } from '@trpc/server'
+export { ArkActionError, arkActionResourceAccountability, arkUserAction, baseAction, createArkActionRouter, protectedAction } from '../../init'
 export { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 export { z } from 'zod/v4'
 
@@ -174,7 +173,7 @@ export function messageCursor(message: Pick<MessageRow, 'createdAt' | 'id'>): Me
 export function parseCursorDate(cursor: MessageCursor) {
   const date = new Date(cursor.createdAt)
   if (Number.isNaN(date.getTime())) {
-    throw new TRPCError({
+    throw new ArkActionError({
       code: 'BAD_REQUEST',
       message: 'Invalid message cursor.',
     })
@@ -347,20 +346,18 @@ export async function withMessageDetails(db: any, items: MessageRow[], arkUserId
   }))
 }
 
-export async function messageWindow(db: any, items: MessageRow[], input: { anchorMessageId?: string, arkUserId?: string, hasNewer: boolean, hasOlder: boolean }) {
+export async function messageWindow(db: any, items: MessageRow[], input: { anchorMessageId?: string, arkUserId?: string, next: boolean, previous: boolean }) {
   return {
     anchorMessageId: input.anchorMessageId,
-    hasNewer: input.hasNewer,
-    hasOlder: input.hasOlder,
     items: await withMessageDetails(db, items, input.arkUserId),
-    newerCursor: items.length ? messageCursor(items[items.length - 1]!) : null,
-    olderCursor: items.length ? messageCursor(items[0]!) : null,
+    nextCursor: input.next && items.length ? messageCursor(items[items.length - 1]!) : null,
+    prevCursor: input.previous && items.length ? messageCursor(items[0]!) : null,
   }
 }
 
 export function requireCapability(capabilities: string[], capability: ArkCapabilityLike) {
   if (!capabilities.includes(capability)) {
-    throw new TRPCError({
+    throw new ArkActionError({
       code: 'FORBIDDEN',
       message: `Missing capability: ${capability}`,
     })
@@ -451,7 +448,7 @@ export async function requireVisibleArkUsers(ctx: AuthCapableContext, arkUserIds
   const visible = new Set(visibleIds)
   const hidden = uniqueIds.filter(id => !visible.has(id))
   if (hidden.length) {
-    throw new TRPCError({
+    throw new ArkActionError({
       code: 'FORBIDDEN',
       message: 'One or more users are not visible to this member.',
     })
@@ -476,7 +473,7 @@ export async function currentArkUserOrThrow(sessionOrCtx: any) {
     ? await requestAuth.arkUser()
     : await currentArkUser(resolveSession(sessionOrCtx))
   if (!arkUser) {
-    throw new TRPCError({
+    throw new ArkActionError({
       code: 'UNAUTHORIZED',
       message: 'Sign in to manage market data.',
     })
@@ -504,7 +501,7 @@ export async function marketManageSpaceIds(ctx: AuthCapableContext, arkUserId: s
 export async function requireStoreManage(ctx: AuthCapableContext, store: MarketStoreRow) {
   const arkUser = await currentArkUserOrThrow(ctx)
   if (!arkUser)
-    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Sign in to manage market data.' })
+    throw new ArkActionError({ code: 'UNAUTHORIZED', message: 'Sign in to manage market data.' })
   await requireSpaceAccess(store.ownerSpaceId, ctx, 'market.jobs.manage')
   return { arkUser }
 }
@@ -512,7 +509,7 @@ export async function requireStoreManage(ctx: AuthCapableContext, store: MarketS
 export async function requireStoreOwnerInput(ctx: AuthCapableContext, input: { ownerSpaceId: string }) {
   const arkUser = await currentArkUserOrThrow(ctx)
   if (!arkUser)
-    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Sign in to manage market data.' })
+    throw new ArkActionError({ code: 'UNAUTHORIZED', message: 'Sign in to manage market data.' })
   await requireSpaceAccess(input.ownerSpaceId, ctx, 'market.jobs.manage')
   return { ownerSpaceId: input.ownerSpaceId, arkUser }
 }
@@ -637,13 +634,13 @@ export async function getChannelForAccess(channelId: string, sessionOrCtx: any, 
     ? await requestAuth.canReadChannel(channelId)
     : await canReadChannel(channelId, resolveSession(sessionOrCtx))
   if (!access.channel) {
-    throw new TRPCError({
+    throw new ArkActionError({
       code: 'NOT_FOUND',
       message: 'Channel not found',
     })
   }
   if (!access.allowed) {
-    throw new TRPCError({
+    throw new ArkActionError({
       code: 'FORBIDDEN',
       message: access.reason ?? 'Channel access denied',
     })

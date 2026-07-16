@@ -4,7 +4,7 @@
 // NOTE: system roles (member/moderator/anon) are reconciled from code on boot,
 // so toggles on them are runtime-only until the next deploy/restart; create a
 // custom role for durable per-environment grants.
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 
 withDefaults(defineProps<{
   showHeader?: boolean
@@ -12,7 +12,7 @@ withDefaults(defineProps<{
   showHeader: true,
 })
 
-const { data, refresh } = await useAsyncData('admin-permissions', () => $trpc.ark.admin.permissions.query())
+const { data, refresh } = await useAsyncData('admin-permissions', () => $arkApi.query('admin.permissions'))
 
 const roles = computed(() => data.value?.roles ?? [])
 const grantMap = ref<Record<string, string[]>>({})
@@ -47,7 +47,7 @@ async function toggle(roleId: string, capability: string) {
     next.delete(capability)
   grantMap.value = { ...grantMap.value, [roleId]: [...next] }
   try {
-    await $trpc.ark.admin.setGrant.mutate({ roleId, capability, allow })
+    await $arkApi.mutate("admin.setGrant", { roleId, capability, allow })
   }
   catch {
     await refresh()

@@ -9,7 +9,7 @@ const emit = defineEmits<{
 
 const open = defineModel<boolean>('open', { default: false })
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const { t } = useI18n()
 const { error: errorMessage, pending, run } = useAsyncAction()
 
@@ -43,7 +43,7 @@ useArkEscapeDismiss(open, close)
 async function submit() {
   if (!props.spaceId || !form.name.trim())
     return
-  const result = await run(() => $trpc.ark.channels.create.mutate({
+  const result = await run(() => $arkApi.mutate("channels.create", {
     kind: 'chat',
     memberArkUserIds: [],
     name: form.name.trim(),

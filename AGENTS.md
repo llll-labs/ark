@@ -1,7 +1,7 @@
 # Agent Notes — `@kurark/ark`
 
 This is the reusable **Ark** runtime: a Nuxt 4 extension a tenant app `extends`. It owns
-the `ark.*` schema, auth bridge, tRPC core router, storage, realtime, and
+the `ark.*` schema, auth bridge, REST APIs, storage, realtime, and
 the core UI. It must stay **tenant-agnostic** — no tenant-specific literals, no
 tenant locale/theme/slug baked in (see `CONTRIBUTING.md`).
 

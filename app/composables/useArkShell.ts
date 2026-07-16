@@ -66,21 +66,30 @@ export interface ShellRole {
   rank?: number
 }
 
+export interface ShellPage {
+  icon?: null | string
+  id: string
+  kind: string
+  slug: string
+  targetType?: null | string
+  title: string
+}
+
 export function useArkShell() {
-  const { $trpc } = useNuxtApp()
+  const { $arkApi } = useNuxtApp()
   const route = useRoute()
   const auth = useArkAuth()
 
   // Base — identity + workspace-wide data. Not watched on navigation.
   const baseQuery = useAsyncData('ark-shell-base', async () => {
-    const spaces = await $trpc.ark.spaces.list.query({}).catch(() => [] as ShellSpace[])
+    const spaces = await $arkApi.query("spaces.list", {}).catch(() => []) as ShellSpace[]
     const channelsBySpace = await Promise.all(
-      spaces.map(space => $trpc.ark.channels.list.query({ spaceId: space.id }).catch(() => [] as ShellChannel[])),
+      spaces.map(space => $arkApi.query("channels.list", { spaceId: space.id }).catch(() => []) as Promise<ShellChannel[]>),
     )
     const [roles, users] = await Promise.all([
-      $trpc.ark.roles.list.query({}).catch(() => [] as ShellRole[]),
-      $trpc.ark.users.list.query({}).catch(() => [] as ShellUser[]),
-    ])
+      $arkApi.query("roles.list", {}).catch(() => [] as ShellRole[]),
+      $arkApi.query("users.list", {}).catch(() => [] as ShellUser[]),
+    ]) as [ShellRole[], ShellUser[]]
     return { allChannels: channelsBySpace.flat(), roles, spaces, users }
   })
 
@@ -108,12 +117,12 @@ export function useArkShell() {
       await baseQuery
       const id = selectedSpaceId.value
       if (!id)
-        return { members: [] as ShellMember[], pages: [] as any[] }
+        return { members: [] as ShellMember[], pages: [] as ShellPage[] }
       const [pages, members] = await Promise.all([
-        $trpc.ark.pages.list.query({ spaceId: id }).catch(() => [] as any[]),
-        $trpc.ark.members.list.query({ spaceId: id }).catch(() => [] as ShellMember[]),
+        $arkApi.query("pages.list", { spaceId: id }).catch(() => [] as ShellPage[]),
+        $arkApi.query("members.list", { spaceId: id }).catch(() => [] as ShellMember[]),
       ])
-      return { members, pages }
+      return { members: members as ShellMember[], pages: pages as ShellPage[] }
     },
     { watch: [selectedSpaceId] },
   )
@@ -126,7 +135,7 @@ export function useArkShell() {
       const id = routeChannelId.value
       if (!id)
         return [] as ShellParticipant[]
-      return await $trpc.ark.channels.participants.query({ id }).catch(() => [] as ShellParticipant[])
+      return await $arkApi.query("channels.participants", { id }).catch(() => []) as ShellParticipant[]
     },
     { watch: [routeChannelId] },
   )

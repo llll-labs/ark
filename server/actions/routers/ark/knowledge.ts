@@ -1,9 +1,9 @@
 import {
-  arkUserProcedure,
-  baseProcedure,
+  arkUserAction,
+  baseAction,
   collectionCreateSchema,
   arkCollections,
-  createTRPCRouter,
+  createArkActionRouter,
   eq,
   fieldCreateSchema,
   arkFields,
@@ -11,17 +11,17 @@ import {
   arkItems,
   requireSpaceAccess,
   spaceScopedListSchema,
-  TRPCError,
+  ArkActionError,
   z,
 } from './shared'
 
-export const collectionsRouter = createTRPCRouter({
-  list: baseProcedure.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
+export const collectionsRouter = createArkActionRouter({
+  list: baseAction.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
     await requireSpaceAccess(input.spaceId, ctx, 'knowledge.access')
     await requireSpaceAccess(input.spaceId, ctx, 'items.read')
     return ctx.db.select().from(arkCollections).where(eq(arkCollections.spaceId, input.spaceId)).orderBy(arkCollections.createdAt)
   }),
-  create: arkUserProcedure.input(collectionCreateSchema).mutation(async ({ ctx, input }) => {
+  create: arkUserAction.input(collectionCreateSchema).mutation(async ({ ctx, input }) => {
     await requireSpaceAccess(input.spaceId, ctx, 'knowledge.access')
     const access = await requireSpaceAccess(input.spaceId, ctx, 'items.manage')
     const [collection] = await ctx.db.insert(arkCollections).values({
@@ -33,18 +33,18 @@ export const collectionsRouter = createTRPCRouter({
     }).returning()
     return collection
   }),
-  fields: baseProcedure.input(z.object({ collectionId: z.uuid() })).query(async ({ ctx, input }) => {
+  fields: baseAction.input(z.object({ collectionId: z.uuid() })).query(async ({ ctx, input }) => {
     const [collection] = await ctx.db.select().from(arkCollections).where(eq(arkCollections.id, input.collectionId)).limit(1)
     if (!collection)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Collection not found' })
+      throw new ArkActionError({ code: 'NOT_FOUND', message: 'Collection not found' })
     await requireSpaceAccess(collection.spaceId, ctx, 'knowledge.access')
     await requireSpaceAccess(collection.spaceId, ctx, 'items.read')
     return ctx.db.select().from(arkFields).where(eq(arkFields.collectionId, input.collectionId)).orderBy(arkFields.position)
   }),
-  createField: arkUserProcedure.input(fieldCreateSchema).mutation(async ({ ctx, input }) => {
+  createField: arkUserAction.input(fieldCreateSchema).mutation(async ({ ctx, input }) => {
     const [collection] = await ctx.db.select().from(arkCollections).where(eq(arkCollections.id, input.collectionId)).limit(1)
     if (!collection)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Collection not found' })
+      throw new ArkActionError({ code: 'NOT_FOUND', message: 'Collection not found' })
     await requireSpaceAccess(collection.spaceId, ctx, 'knowledge.access')
     await requireSpaceAccess(collection.spaceId, ctx, 'items.manage')
     const [field] = await ctx.db.insert(arkFields).values({
@@ -59,13 +59,13 @@ export const collectionsRouter = createTRPCRouter({
   }),
 })
 
-export const itemsRouter = createTRPCRouter({
-  list: baseProcedure.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
+export const itemsRouter = createArkActionRouter({
+  list: baseAction.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
     await requireSpaceAccess(input.spaceId, ctx, 'knowledge.access')
     await requireSpaceAccess(input.spaceId, ctx, 'items.read')
     return ctx.db.select().from(arkItems).where(eq(arkItems.spaceId, input.spaceId)).orderBy(arkItems.position, arkItems.createdAt).limit(100)
   }),
-  create: arkUserProcedure.input(itemCreateSchema).mutation(async ({ ctx, input }) => {
+  create: arkUserAction.input(itemCreateSchema).mutation(async ({ ctx, input }) => {
     await requireSpaceAccess(input.spaceId, ctx, 'knowledge.access')
     const access = await requireSpaceAccess(input.spaceId, ctx, 'items.create')
     const [item] = await ctx.db.insert(arkItems).values({

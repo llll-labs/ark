@@ -83,6 +83,102 @@ Local private-file signed URLs are app HMAC URLs signed with `BETTER_AUTH_SECRET
 
 Run the Drizzle migrations shipped with the package before booting a tenant app that uses Ark. The migrations create the Ark runtime schema, including auth, users, spaces, roles, capabilities, content, channels, files, market stores and jobs, notification outbox, and settings. Tenant apps should run their own migration chain after the core chain for tenant-owned physical tables.
 
+## Resource API
+
+Ark exposes registered physical tables through a Directus-style REST surface:
+
+```text
+GET    /api/ark/items/:resource
+GET    /api/ark/items/:resource/:id
+POST   /api/ark/items/:resource
+PATCH  /api/ark/items/:resource/:id
+DELETE /api/ark/items/:resource/:id
+```
+
+Tenant code registers its migration-owned physical tables from a Nitro plugin:
+
+```ts
+import { registerArkResource } from '@kurark/ark/server/resources'
+import { jobs } from '../db/schema'
+
+export default defineNitroPlugin(() => {
+  registerArkResource({
+    name: 'jobs',
+    table: jobs,
+    deletion: 'soft',
+    operations: { create: true, delete: true, read: true, update: true },
+    rowPolicy: {
+      read: accountability => ({ spaceId: { _eq: accountability.spaceId } }),
+      create: accountability => ({ spaceId: { _eq: accountability.spaceId } }),
+      update: accountability => ({ spaceId: { _eq: accountability.spaceId } }),
+      delete: accountability => ({ spaceId: { _eq: accountability.spaceId } }),
+    },
+  })
+})
+```
+
+Adoption registers closed-by-default permissions such as `jobs.items.read` and
+`jobs.items.create`; an administrator must grant them through Ark permissions.
+Code-owned Resources use `registerArkResource()` and opt into every generic
+operation explicitly. Only Ark code-owned Resources may use the `ark.*` prefix.
+Core aggregate roots are registered with generic CRUD disabled: `ark.channels`,
+`ark.files`, `ark.market_jobs`, `ark.market_stores`, `ark.messages`, `ark.pages`,
+`ark.spaces`, and `ark.users`. Specialized Domain Actions enforce their own
+permissions and invariants, then write through the Resource lifecycle and emit
+targeted events such as `ark.messages.items.create` or
+`ark.market_jobs.items.update`. Supporting join, state, auth, and outbox tables
+remain internal implementation details rather than independent Resources.
+Requests act as the public space by default. A client acting for another space
+passes its id in `X-Ark-Space-Id`; Resource permissions and Row Policies are
+then evaluated with that space as the actor.
+
+Tenant-owned Nitro endpoints reuse the same request accountability and Resource
+policies instead of rebuilding auth context:
+
+```ts
+import { useArkResourceService } from '@kurark/ark/server/resources'
+
+export default defineEventHandler(async (event) => {
+  const jobs = await useArkResourceService(event, 'jobs')
+  return { data: await jobs.create(await readBody(event)) }
+})
+```
+
+For endpoints composing several Resources, call
+`createArkResourceRequestScope(event)` once and use
+`scope.services.resource('jobs')`. Accountability distinguishes the Better Auth
+principal (`userId`) from the provisioned Ark profile (`arkUserId`); `spaceId`
+is the active domain actor.
+
+List queries support `limit`, `offset`, `sort`, `fields`, JSON `filter`, and
+Directus-style bracket filters such as
+`filter[status][_eq]=open`. Generic mutations operate on one item and accept
+scalar foreign keys only; bulk and deep relational writes are intentionally not
+part of v1. Dot-selected fields explicitly expand configured relations through
+the target Resource's normal read permissions and policies. The live REST
+contract is available as OpenAPI at `/api/ark/openapi`.
+
+Resource hooks use targeted event names and the Directus callback shape:
+
+```ts
+import { arkResourceHooks } from '@kurark/ark/server/resources'
+
+arkResourceHooks.filter('jobs.items.create', (payload, meta, context) => payload)
+arkResourceHooks.action('jobs.items.create', async (meta, context) => {
+  // Required by default: awaited inside the Resource transaction. Services
+  // created here inherit its accountability and transaction.
+  await context.services.resource('job_audits').create({ jobId: meta.key })
+})
+arkResourceHooks.action('jobs.items.create', async (meta, context) => {
+  // Dispatched asynchronously after commit; failures are logged.
+}, { bestEffort: true })
+```
+
+Ark discovers tenant-owned `public` tables without exposing them automatically.
+Administrators explicitly adopt eligible tables from Settings → Content →
+Resources; adoption metadata persists in `ark.resource_definitions`. Code
+registration remains authoritative over compatible adopted metadata.
+
 ## Auth And Middleware
 
 Ark owns the default route guards in `app/middleware`:

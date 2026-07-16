@@ -6,6 +6,8 @@ import {
   arkUsers,
 } from '../../db/schema'
 import { and, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm'
+import { withArkResourceTransaction } from '../resources/service'
+import { registerCoreArkResources } from '../resources/core'
 import { useDatabase } from './db'
 
 type ArkForumChannel = typeof arkChannels.$inferSelect
@@ -330,54 +332,66 @@ export async function arkForumTopicPayload(input: ArkForumTopicPayloadInput) {
 }
 
 export async function createArkForumMessage(input: ArkForumMessageInput) {
+  registerCoreArkResources()
   const db = input.db ?? useDatabase()
   const body = input.body.trim()
   if (!body)
     return null
 
-  let rootMessageId: string | null = null
-  let parentMessageId: string | null = null
-  if (input.parentMessageId) {
-    const [parent] = await db.select({
-      channelId: arkMessages.channelId,
-      id: arkMessages.id,
-      rootMessageId: arkMessages.rootMessageId,
-    }).from(arkMessages).where(and(
-      eq(arkMessages.id, input.parentMessageId),
-      isNull(arkMessages.deletedAt),
-    )).limit(1)
-    if (!parent || parent.channelId !== input.channelId)
-      return null
-    parentMessageId = parent.id
-    rootMessageId = parent.rootMessageId ?? parent.id
-  }
+  return withArkResourceTransaction({
+    accountability: {
+      arkUserId: input.arkUserId,
+      capabilities: [],
+      spaceId: input.spaceId,
+      system: false,
+      userId: null,
+    },
+    authorization: 'domain',
+    database: db,
+  }, async ({ database, services }) => {
+    let rootMessageId: string | null = null
+    let parentMessageId: string | null = null
+    if (input.parentMessageId) {
+      const [parent] = await database.select({
+        channelId: arkMessages.channelId,
+        id: arkMessages.id,
+        rootMessageId: arkMessages.rootMessageId,
+      }).from(arkMessages).where(and(
+        eq(arkMessages.id, input.parentMessageId),
+        isNull(arkMessages.deletedAt),
+      )).limit(1)
+      if (!parent || parent.channelId !== input.channelId)
+        return null
+      parentMessageId = parent.id
+      rootMessageId = parent.rootMessageId ?? parent.id
+    }
 
-  const [message] = await db.insert(arkMessages).values({
-    authorArkUserId: input.arkUserId,
-    body,
-    bodyJson: input.bodyJson ?? arkForumBodyJson(input.richTextJson),
-    channelId: input.channelId,
-    rootMessageId,
-    spaceId: input.spaceId,
-  }).returning()
-  if (!message)
-    return null
+    const message = await services.resource('ark.messages').create({
+      authorArkUserId: input.arkUserId,
+      body,
+      bodyJson: input.bodyJson ?? arkForumBodyJson(input.richTextJson),
+      channelId: input.channelId,
+      rootMessageId,
+      spaceId: input.spaceId,
+    }) as typeof arkMessages.$inferSelect
+    if (message.channelId !== input.channelId || message.spaceId !== input.spaceId)
+      throw new Error('Message lifecycle changed its channel boundary.')
 
-  if (message && parentMessageId) {
-    await db.insert(arkMessageRelations).values({
-      messageId: message.id,
-      relationType: 'forum_parent',
-      targetId: parentMessageId,
-      targetType: 'message',
-    }).onConflictDoNothing()
-  }
+    if (parentMessageId) {
+      await database.insert(arkMessageRelations).values({
+        messageId: message.id,
+        relationType: 'forum_parent',
+        targetId: parentMessageId,
+        targetType: 'message',
+      }).onConflictDoNothing()
+    }
 
-  await db.update(arkChannelsTable).set({
-    lastMessageAt: new Date(),
-    lastMessagePreview: body.slice(0, 180),
-    messagesCount: sql`${arkChannelsTable.messagesCount} + 1`,
-    updatedAt: new Date(),
-  }).where(eq(arkChannelsTable.id, input.channelId))
-
-  return message
+    await services.resource('ark.channels').update(input.channelId, {
+      lastMessageAt: new Date(),
+      lastMessagePreview: body.slice(0, 180),
+      messagesCount: sql`${arkChannelsTable.messagesCount} + 1`,
+      updatedAt: new Date(),
+    })
+    return message
+  })
 }

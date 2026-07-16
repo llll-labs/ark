@@ -7,7 +7,7 @@ const props = defineProps<{
 }>()
 const selectedSpaceId = defineModel<string>('selectedSpaceId', { default: '' })
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const { t } = useI18n()
 const { pending: saving, error: errorMessage, success: successMessage, run } = useAsyncAction()
 const addMemberOpen = ref(false)
@@ -27,9 +27,9 @@ const memberForm = reactive({
 
 const { data: refData, refresh: refreshRef } = await useAsyncData('ark-members-ref', async () => {
   const [allSpaces, allRoles, allUsers] = await Promise.all([
-    $trpc.ark.spaces.list.query({}).catch(() => []),
-    $trpc.ark.roles.list.query({}).catch(() => []),
-    $trpc.ark.users.list.query({}).catch(() => []),
+    $arkApi.query("spaces.list", {}).catch(() => []),
+    $arkApi.query("roles.list", {}).catch(() => []),
+    $arkApi.query("users.list", {}).catch(() => []),
   ])
   return { spaces: allSpaces as any[], roles: allRoles as any[], users: allUsers as any[] }
 }, { default: () => ({ spaces: [], roles: [], users: [] }) })
@@ -49,7 +49,7 @@ const { data: members, refresh: refreshMembers } = await useAsyncData('ark-membe
   const spaceId = selectedSpace.value?.id
   if (!spaceId)
     return []
-  return await $trpc.ark.members.list.query({ spaceId }).catch(() => []) as any[]
+  return await $arkApi.query("members.list", { spaceId }).catch(() => []) as any[]
 }, { default: () => [], watch: [selectedSpace] })
 
 watch(() => props.reloadSignal, () => {
@@ -77,7 +77,7 @@ async function addMember() {
   if (!space || !memberForm.arkUserId)
     return
   await run(async () => {
-    await $trpc.ark.members.upsert.mutate({
+    await $arkApi.mutate("members.upsert", {
       arkUserId: memberForm.arkUserId,
       roleId: memberForm.roleId || null,
       scopeId: space.id,
@@ -95,7 +95,7 @@ async function saveMember(member: any) {
   if (!space || !member?.arkUserId)
     return
   await run(async () => {
-    await $trpc.ark.members.upsert.mutate({
+    await $arkApi.mutate("members.upsert", {
       arkUserId: member.arkUserId,
       roleId: member.roleId || null,
       scopeId: space.id,

@@ -9,7 +9,7 @@
  */
 import type { MaybeRefOrGetter } from 'vue'
 
-/** Normalize a tRPC list payload that may be a bare array or `{ items }`. */
+/** Normalize a REST list payload that may be a bare array or `{ items }`. */
 export function jobItems(value: unknown): any[] {
   if (Array.isArray(value))
     return value
@@ -34,7 +34,7 @@ export interface UseArkJobsOptions {
 }
 
 export async function useArkJobs(options: UseArkJobsOptions) {
-  const { $trpc } = useNuxtApp()
+  const { $arkApi } = useNuxtApp()
   const pageSize = options.pageSize ?? 10
   const page = ref(1)
 
@@ -72,7 +72,7 @@ export async function useArkJobs(options: UseArkJobsOptions) {
   // top-level `await useAsyncData(...)` behavior.
   const { data, refresh, status } = await useAsyncData(
     options.key,
-    () => $trpc.ark.market.jobs.list.query(jobsQueryInput()),
+    () => $arkApi.query("market.jobs.list", jobsQueryInput()),
   )
 
   const jobs = computed(() => jobItems(data.value))

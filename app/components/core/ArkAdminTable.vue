@@ -8,7 +8,7 @@ import ArkAdminRowForm from './ArkAdminRowForm.vue'
 
 const props = defineProps<{ tableKey: string }>()
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 
 const pageSizes = [25, 50, 100, 250, 500, 1000]
 const pageSize = ref(25)
@@ -29,7 +29,7 @@ onMounted(() => {
 
 const { data, status, error, refresh } = await useAsyncData(
   `admin-rows-${props.tableKey}`,
-  () => $trpc.ark.admin.rows.query({
+  () => $arkApi.query("admin.rows", {
     table: props.tableKey,
     limit: pageSize.value,
     offset: (page.value - 1) * pageSize.value,
@@ -45,7 +45,7 @@ watch(pageSize, () => {
 
 type AdminRow = Record<string, unknown>
 interface AdminColumn { key: string, type: string, enumValues?: string[], editable: boolean, ref?: { table: string | null, labelColumn: string } }
-interface AdminTableMeta { description: string, group: string, icon: string, key: string, label: string, primaryKey: string }
+interface AdminTableMeta { canDelete: boolean, description: string, group: string, icon: string, key: string, label: string, primaryKey: string }
 const allColumns = computed<AdminColumn[]>(() => (data.value?.columns ?? []) as AdminColumn[])
 const meta = computed<AdminTableMeta | null>(() => (data.value?.table ?? null) as AdminTableMeta | null)
 const refs = computed<Record<string, Record<string, string>>>(() => (data.value?.refs ?? {}) as Record<string, Record<string, string>>)
@@ -483,6 +483,7 @@ function columnIsResizing(column: VueTableColumn<AdminRow, unknown>): boolean {
       :columns="allColumns"
       :row="editRow"
       :primary-key="meta?.primaryKey ?? 'id'"
+      :can-delete="meta?.canDelete ?? false"
       @saved="refresh"
       @deleted="refresh"
     />

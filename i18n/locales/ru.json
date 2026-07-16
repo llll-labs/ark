@@ -19,8 +19,15 @@
     "selectTable": "Выберите таблицу",
     "tabs": {
       "data": "Данные",
+      "resources": "Ресурсы",
       "views": "Виды"
     },
+    "resourcesTitle": "Ресурсы базы данных",
+    "resourcesHint": "Найдите таблицы public и явно подключите их перед публикацией Resource CRUD.",
+    "resourcePrimaryKey": "Первичный ключ: {field}",
+    "resourceNoPrimaryKey": "Нет первичного ключа; таблицу нельзя подключить.",
+    "resourceAdopted": "Подключено",
+    "resourceAdopt": "Подключить",
     "permissionsTitle": "Права доступа",
     "permissionsHint": "Переключайте capability по ролям. Системные роли пересеваются из кода при старте.",
     "capability": "Capability",

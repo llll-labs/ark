@@ -6,7 +6,7 @@ const props = defineProps<{
 }>()
 const selectedSpaceId = defineModel<string>('selectedSpaceId', { default: '' })
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const { t } = useI18n()
 const { pending: saving, error: errorMessage, success: successMessage, run } = useAsyncAction()
 const createChannelOpen = ref(false)
@@ -35,8 +35,8 @@ const channelForm = reactive({
 
 const { data: refData, refresh: refreshRef } = await useAsyncData('ark-channels-ref', async () => {
   const [allSpaces, allUsers] = await Promise.all([
-    $trpc.ark.spaces.list.query({}).catch(() => []),
-    $trpc.ark.users.list.query({}).catch(() => []),
+    $arkApi.query("spaces.list", {}).catch(() => []),
+    $arkApi.query("users.list", {}).catch(() => []),
   ])
   return { spaces: allSpaces as any[], users: allUsers as any[] }
 }, { default: () => ({ spaces: [], users: [] }) })
@@ -52,7 +52,7 @@ const { data: channels, refresh: refreshChannels } = await useAsyncData('ark-cha
   const spaceId = selectedSpace.value?.id
   if (!spaceId)
     return []
-  return await $trpc.ark.channels.list.query({ spaceId }).catch(() => []) as any[]
+  return await $arkApi.query("channels.list", { spaceId }).catch(() => []) as any[]
 }, { default: () => [], watch: [selectedSpace] })
 
 watch(() => props.reloadSignal, () => {
@@ -70,7 +70,7 @@ async function createChannel() {
   if (!space || !channelForm.name.trim())
     return
   await run(async () => {
-    await $trpc.ark.channels.create.mutate({
+    await $arkApi.mutate("channels.create", {
       kind: channelForm.kind as any,
       memberArkUserIds: channelForm.memberArkUserIds,
       name: channelForm.name.trim(),

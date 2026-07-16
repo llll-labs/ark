@@ -23,7 +23,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const resolvedSubmitLabel = computed(() => props.submitLabel || t('store.saveProfile'))
 const auth = useArkAuth()
 const saving = ref(false)
@@ -57,9 +57,9 @@ const taxonomySections = computed(() => [
 
 const { data, pending, refresh } = await useAsyncData(`ark-store-form-${props.variant}`, async () => {
   const [userSettings, options, mine] = await Promise.all([
-    $trpc.ark.users.settings.query({}).catch(() => null),
-    $trpc.ark.market.options.query({}).catch(() => ({ categories: [], skills: [], styles: [], tags: [], tools: [] })),
-    $trpc.ark.market.stores.mine.query({}).catch(() => ({ manageableSpaceIds: [], stores: [] })),
+    $arkApi.query("users.settings", {}).catch(() => null),
+    $arkApi.query("market.options", {}).catch(() => ({ categories: [], skills: [], styles: [], tags: [], tools: [] })),
+    $arkApi.query("market.stores.mine", {}).catch(() => ({ manageableSpaceIds: [], stores: [] })),
   ])
   return { mine, options, userSettings }
 })
@@ -124,7 +124,7 @@ async function updateOnboardingProfileJson(input: {
 
   const now = new Date().toISOString()
   const previousJson = currentProfileJson()
-  await $trpc.ark.users.updateProfile.mutate({
+  await $arkApi.mutate("users.updateProfile", {
     avatarFileId: arkUser.avatarFileId ?? null,
     bio: form.bio || arkUser.bio || null,
     displayName: form.displayName.trim() || form.name.trim() || arkUser.displayName,
@@ -164,7 +164,7 @@ async function save() {
   errorMessage.value = ''
   try {
     const reviewPending = Boolean(props.reviewRequired)
-    const storeRow = await $trpc.ark.market.stores.upsert.mutate({
+    const storeRow = await $arkApi.mutate("market.stores.upsert", {
       availability: form.availability || null,
       bio: form.bio || null,
       categoryIds: form.categoryIds,

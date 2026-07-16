@@ -22,7 +22,7 @@ const emit = defineEmits<{
   toggleMaximized: []
 }>()
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const { t, locale, locales, setLocale } = useI18n()
 const auth = useArkAuth()
 
@@ -159,7 +159,7 @@ async function load() {
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    fillSettings(await $trpc.ark.users.settings.query({}))
+    fillSettings(await $arkApi.query("users.settings", {}))
   }
   catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('userSettings.errorSignIn')
@@ -171,7 +171,7 @@ async function load() {
 
 async function saveProfile() {
   const result = await run(
-    () => $trpc.ark.users.updateProfile.mutate({
+    () => $arkApi.mutate("users.updateProfile", {
       avatarFileId: profileForm.avatarFileId,
       bio: profileForm.bio || null,
       displayName: profileForm.displayName,
@@ -255,7 +255,7 @@ async function saveSettings() {
         model: settingsForm.agentModel,
         tone: settingsForm.agentTone,
       }
-      await $trpc.ark.users.updateSettings.mutate({
+      await $arkApi.mutate("users.updateSettings", {
         agentJson,
         appearanceJson,
         notificationsJson,

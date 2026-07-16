@@ -10,12 +10,13 @@ const props = withDefaults(defineProps<{
   table: string
   columns: Column[]
   row: Record<string, unknown> | null
+  canDelete?: boolean
   /** Primary-key column of the table; registered app tables may not use `id`. */
   primaryKey?: string
-}>(), { primaryKey: 'id' })
+}>(), { canDelete: false, primaryKey: 'id' })
 const emit = defineEmits<{ saved: [], deleted: [] }>()
 const open = defineModel<boolean>('open', { default: false })
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 
 const editable = computed(() => props.columns.filter(column => column.editable))
 // Relation-picker options, fetched lazily per referenced table when the form opens.
@@ -25,7 +26,7 @@ async function loadRelationOptions() {
   await Promise.all(tables.map(async (table) => {
     if (relationOptions.value[table])
       return
-    relationOptions.value[table] = await $trpc.ark.admin.options.query({ table }).catch(() => [])
+    relationOptions.value[table] = await $arkApi.query("admin.options", { table }).catch(() => [])
   }))
 }
 const rowId = computed(() => props.row?.[props.primaryKey])
@@ -75,9 +76,9 @@ async function save() {
     for (const column of editable.value)
       values[column.key] = toValue(column, form[column.key])
     if (isEdit.value)
-      await $trpc.ark.admin.update.mutate({ table: props.table, id: String(rowId.value), values })
+      await $arkApi.mutate("admin.update", { table: props.table, id: String(rowId.value), values })
     else
-      await $trpc.ark.admin.create.mutate({ table: props.table, values })
+      await $arkApi.mutate("admin.create", { table: props.table, values })
     emit('saved')
     open.value = false
   }
@@ -93,7 +94,7 @@ async function remove() {
   saving.value = true
   error.value = ''
   try {
-    await $trpc.ark.admin.remove.mutate({ table: props.table, id: String(rowId.value) })
+    await $arkApi.mutate("admin.remove", { table: props.table, id: String(rowId.value) })
     emit('deleted')
     open.value = false
   }
@@ -132,7 +133,7 @@ async function remove() {
     </template>
     <template #footer>
       <div class="flex w-full items-center gap-2">
-        <UButton v-if="isEdit" color="error" variant="soft" icon="i-lucide-trash-2" :loading="saving" @click="remove">
+        <UButton v-if="isEdit && canDelete" color="error" variant="soft" icon="i-lucide-trash-2" :loading="saving" @click="remove">
           {{ $t('admin.delete') }}
         </UButton>
         <div class="ml-auto flex gap-2">

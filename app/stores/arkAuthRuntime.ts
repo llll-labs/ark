@@ -1,6 +1,7 @@
 import { useNuxtApp } from '#app'
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
+import { arkApiErrorMessage } from '../utils/arkApiError'
 
 export interface ArkMeState {
   ark: { id: string, name: string, slug: string }
@@ -20,19 +21,6 @@ export interface ArkOAuthStatus {
 export interface ArkPublicSettings {
   authJson?: unknown
   [key: string]: unknown
-}
-
-function authRuntimeErrorMessage(error: unknown, fallback: string) {
-  if (error instanceof Error && error.message)
-    return error.message
-  if (error && typeof error === 'object') {
-    const data = 'data' in error ? (error as { data?: any }).data : null
-    if (data?.statusMessage)
-      return String(data.statusMessage)
-    if (data?.message)
-      return String(data.message)
-  }
-  return fallback
 }
 
 export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
@@ -62,7 +50,7 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
       checking.value = true
       error.value = null
       try {
-        const result = await (nuxtApp.$trpc as any).ark.me.query()
+        const result = await nuxtApp.$arkApi.query('me')
         me.value = result
         checked.value = true
         return result as ArkMeState
@@ -70,7 +58,7 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
       catch (cause) {
         me.value = null
         checked.value = true
-        error.value = authRuntimeErrorMessage(cause, 'Session check failed')
+        error.value = arkApiErrorMessage(cause, 'Session check failed')
         return null
       }
       finally {
@@ -95,7 +83,7 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
       authUiLoading.value = true
       try {
         const [settings, telegramStatus, discordStatus] = await Promise.all([
-          (nuxtApp.$trpc as any).ark.settings.public.query().catch(() => null),
+          nuxtApp.$arkApi.query('settings.public').catch(() => null),
           $fetch<ArkOAuthStatus>('/api/ark/auth/telegram-oauth/status').catch(() => ({ configured: false })),
           $fetch<ArkOAuthStatus>('/api/ark/auth/discord-oauth/status').catch(() => ({ configured: false })),
         ])

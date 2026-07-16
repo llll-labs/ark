@@ -127,7 +127,7 @@ export async function runTelegramMiniAuthGuard(to: any) {
     if (me?.authenticated)
       return
 
-    const settings = await nuxtApp.$trpc.ark.settings.public.query().catch(() => null)
+    const settings = await nuxtApp.$arkApi.query('settings.public').catch(() => null)
     const authJson = settingsObject(settings?.authJson)
     if (!authJson.telegram_enabled)
       return
@@ -192,7 +192,7 @@ export async function runArkOnboardingGuard(to: any) {
   if (!hasArkUser(me))
     return
 
-  const settings = await nuxtApp.$trpc.ark.settings.public.query().catch(() => null)
+  const settings = await nuxtApp.$arkApi.query('settings.public').catch(() => null)
   if (to.path === '/onboarding')
     return
 

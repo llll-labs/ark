@@ -23,7 +23,7 @@ const localOpen = ref(false)
 const fullscreen = ref(false)
 const auth = useArkAuth()
 const { t } = useI18n()
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const checkedAuth = ref(false)
 const roles = ref<BubbleRole[]>([])
 
@@ -63,7 +63,7 @@ function closePortal() {
 onMounted(async () => {
   const me = auth.checked.value ? auth.me.value : await auth.check().catch(() => null)
   if (me?.authenticated)
-    roles.value = await $trpc.ark.roles.list.query({}).catch(() => [])
+    roles.value = await $arkApi.query("roles.list", {}).catch(() => [])
   checkedAuth.value = true
 })
 </script>

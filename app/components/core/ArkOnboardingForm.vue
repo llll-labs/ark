@@ -1,14 +1,14 @@
 <script setup lang="ts">
 const route = useRoute()
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const auth = useArkAuth()
 
 const { data, pending, refresh } = await useAsyncData('ark-onboarding-auth-step', async () => {
   const me = await auth.check(true)
   const [settings, userSettings, mine] = await Promise.all([
-    $trpc.ark.settings.public.query().catch(() => null),
-    $trpc.ark.users.settings.query({}).catch(() => null),
-    $trpc.ark.market.stores.mine.query({}).catch(() => ({ manageableSpaceIds: [], stores: [] })),
+    $arkApi.query('settings.public').catch(() => null),
+    $arkApi.query("users.settings", {}).catch(() => null),
+    $arkApi.query("market.stores.mine", {}).catch(() => ({ manageableSpaceIds: [], stores: [] })),
   ])
   return { me, mine, settings, userSettings }
 })
@@ -79,7 +79,7 @@ async function completeOnboarding(input: { completed: boolean, dismissed?: boole
     return
 
   const now = new Date().toISOString()
-  await $trpc.ark.users.updateProfile.mutate({
+  await $arkApi.mutate("users.updateProfile", {
     avatarFileId: arkUser.avatarFileId ?? null,
     bio: arkUser.bio ?? null,
     displayName: arkUser.displayName,
@@ -130,7 +130,7 @@ async function postJob() {
   busy.value = true
   errorMessage.value = ''
   try {
-    await $trpc.ark.market.jobs.upsert.mutate({
+    await $arkApi.mutate("market.jobs.upsert", {
       spaceId: personalSpaceId.value,
       title: hireForm.title.trim(),
       summary: hireForm.summary || undefined,

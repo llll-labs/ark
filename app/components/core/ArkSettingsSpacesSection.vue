@@ -6,7 +6,7 @@ const props = defineProps<{
 }>()
 const selectedSpaceId = defineModel<string>('selectedSpaceId', { default: '' })
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const { t } = useI18n()
 const { pending: saving, error: errorMessage, success: successMessage, run } = useAsyncAction()
 const createSpaceOpen = ref(false)
@@ -39,9 +39,9 @@ const spaceForm = reactive({
 
 const { data, refresh } = await useAsyncData('ark-spaces-section', async () => {
   const [allSpaces, allRoles, allUsers] = await Promise.all([
-    $trpc.ark.spaces.list.query({}).catch(() => []),
-    $trpc.ark.roles.list.query({}).catch(() => []),
-    $trpc.ark.users.list.query({}).catch(() => []),
+    $arkApi.query("spaces.list", {}).catch(() => []),
+    $arkApi.query("roles.list", {}).catch(() => []),
+    $arkApi.query("users.list", {}).catch(() => []),
   ])
   return { spaces: allSpaces as any[], roles: allRoles as any[], users: allUsers as any[] }
 }, { default: () => ({ spaces: [], roles: [], users: [] }) })
@@ -72,7 +72,7 @@ async function createSpace() {
   if (!parentSpaceId || !spaceForm.name.trim())
     return
   await run(async () => {
-    const space = await $trpc.ark.spaces.create.mutate({
+    const space = await $arkApi.mutate("spaces.create", {
       description: spaceForm.description || undefined,
       inheritAccess: spaceForm.inheritAccess,
       kind: spaceForm.kind as any,
@@ -84,7 +84,7 @@ async function createSpace() {
     if (!space)
       throw new Error(t('settings.spaces.createFailed'))
     for (const arkUserId of spaceForm.initialMemberIds) {
-      await $trpc.ark.members.upsert.mutate({
+      await $arkApi.mutate("members.upsert", {
         arkUserId,
         roleId: spaceForm.initialRoleId || null,
         scopeId: space.id,

@@ -5,24 +5,18 @@ import { marketRouter } from './ark/market'
 import { pagesRouter } from './ark/pages'
 import { settingsRouter } from './ark/settings'
 import {
-  baseProcedure,
-  createTRPCRouter,
+  baseAction,
+  createArkActionRouter,
   defaultArkIdentity,
   eq,
   loadArkUserExtension,
   arkMemberships,
-  sql,
 } from './ark/shared'
 import { membersRouter, permissionsRouter, rolesRouter, spacesRouter } from './ark/spaces'
 import { usersRouter } from './ark/users'
 
-export const arkRouter = createTRPCRouter({
-  health: baseProcedure.query(async ({ ctx }) => {
-    await ctx.db.execute(sql`select 1 as ok`)
-    return { database: 'reachable', ok: true }
-  }),
-
-  me: baseProcedure.query(async ({ ctx }) => {
+export const arkRouter = createArkActionRouter({
+  me: baseAction.query(async ({ ctx }) => {
     if (!ctx.session?.user) {
       return {
         ark: defaultArkIdentity(),
@@ -68,8 +62,12 @@ export const arkRouter = createTRPCRouter({
   channels: channelsRouter,
   messages: messagesRouter,
   pages: pagesRouter,
-  collections: collectionsRouter,
-  items: itemsRouter,
+  knowledge: createArkActionRouter({
+    collections: collectionsRouter,
+    items: itemsRouter,
+  }),
   market: marketRouter,
   admin: adminRouter,
 })
+
+export type ArkRouter = typeof arkRouter

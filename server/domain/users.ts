@@ -7,6 +7,7 @@ import {
   arkSpaces,
   arkUsers,
 } from '../../db/schema'
+import { createArkResourceServices } from '../resources/service'
 import { ensureDefaultPermissionRoles } from './permissions'
 import { syncArkUserProviderAvatar } from '../utils/provider-avatar'
 import { arkHooks } from '../utils/hooks'
@@ -62,17 +63,26 @@ export async function ensureArkUserPersonalSpace(arkUser: ArkUserRow, db: Databa
       personalSlug = `${baseSlug}-${attempt}`
     }
 
-    const [created] = await db.insert(arkSpaces).values({
+    const created = await createArkResourceServices({
+      accountability: {
+        arkUserId: arkUser.id,
+        capabilities: [],
+        spaceId: null,
+        system: false,
+        userId: arkUser.authUserId,
+      },
+      authorization: 'domain',
+      database: db,
+    }).resource('ark.spaces').create({
       inheritAccess: false,
       kind: 'organization',
       name: arkUser.displayName,
       ownerArkUserId: arkUser.id,
+      parentSpaceId: null,
       slug: personalSlug,
       status: 'active',
       visibility: 'private',
-    }).returning()
-    if (!created)
-      throw new Error('Personal Ark space could not be created.')
+    }) as ArkSpaceRow
     return created
   })()
 
@@ -160,9 +170,19 @@ export async function ensureArkUser(authUser: ArkAuthUser, ctx: ArkUserProvision
     },
   }, ctx)
 
-  const [created] = await ctx.db.insert(arkUsers).values(filtered.values).returning()
-  if (!created)
-    throw new Error('Ark user could not be created.')
+  const created = await createArkResourceServices({
+    accountability: {
+      arkUserId: null,
+      capabilities: [],
+      spaceId: root.id,
+      system: false,
+      userId: authUser.id,
+    },
+    authorization: 'domain',
+    database: ctx.db,
+  }).resource('ark.users').create(filtered.values) as ArkUserRow
+  if (created.authUserId !== authUser.id)
+    throw new Error('Ark user lifecycle changed its auth identity.')
 
   await assignRootMembership({ arkUser: created, authUser, root }, ctx)
   await arkHooks.runAction('ark.users.created', { arkUser: created, authUser }, ctx)

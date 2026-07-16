@@ -1,15 +1,18 @@
+import { createArkResourceServices } from '../../../resources/service'
 import {
+  arkActionResourceAccountability,
   and,
-  arkUserProcedure,
+  arkUserAction,
   arkUsers,
   arkAuthAccounts,
-  createTRPCRouter,
+  createArkActionRouter,
   emptyListSchema,
   eq,
   arkFiles,
   inArray,
-  protectedProcedure,
-  TRPCError,
+  isNull,
+  protectedAction,
+  ArkActionError,
   userProfileUpdateSchema,
   arkUserSettings,
   userSettingsUpdateSchema,
@@ -17,8 +20,8 @@ import {
 } from './shared'
 import { canUseFileAsProfileAvatar } from '../../../utils/avatar'
 
-export const usersRouter = createTRPCRouter({
-  list: protectedProcedure.input(emptyListSchema).query(async ({ ctx }) => {
+export const usersRouter = createArkActionRouter({
+  list: protectedAction.input(emptyListSchema).query(async ({ ctx }) => {
     const visibleIds = await visibleArkUserIds(ctx)
     if (Array.isArray(visibleIds) && !visibleIds.length)
       return []
@@ -38,6 +41,7 @@ export const usersRouter = createTRPCRouter({
         .where(and(
           eq(arkUsers.kind, 'human'),
           inArray(arkUsers.id, visibleIds),
+          isNull(arkUsers.deletedAt),
         ))
         .orderBy(arkUsers.displayName)
         .limit(100)
@@ -47,15 +51,18 @@ export const usersRouter = createTRPCRouter({
     const rows = await ctx.db
       .select(fields)
       .from(arkUsers)
-      .where(eq(arkUsers.kind, 'human'))
+      .where(and(
+        eq(arkUsers.kind, 'human'),
+        isNull(arkUsers.deletedAt),
+      ))
       .orderBy(arkUsers.displayName)
       .limit(100)
     return rows
   }),
-  settings: protectedProcedure.input(emptyListSchema).query(async ({ ctx }) => {
+  settings: protectedAction.input(emptyListSchema).query(async ({ ctx }) => {
     const arkUser = await ctx.auth.arkUser()
     if (!arkUser)
-      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
+      throw new ArkActionError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
     const [settings] = await ctx.db.select().from(arkUserSettings).where(eq(arkUserSettings.arkUserId, arkUser.id)).limit(1)
     const accounts = arkUser.authUserId
       ? await ctx.db.select({ providerId: arkAuthAccounts.providerId }).from(arkAuthAccounts).where(eq(arkAuthAccounts.userId, arkUser.authUserId))
@@ -66,31 +73,38 @@ export const usersRouter = createTRPCRouter({
       login: { providers: accounts.map(row => row.providerId), email: ctx.session?.user?.email ?? null },
     }
   }),
-  updateProfile: arkUserProcedure.input(userProfileUpdateSchema).mutation(async ({ ctx, input }) => {
+  updateProfile: arkUserAction.input(userProfileUpdateSchema).mutation(async ({ ctx, input }) => {
     const arkUser = await ctx.auth.arkUser()
     if (!arkUser)
-      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
+      throw new ArkActionError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
 
     if (input.avatarFileId) {
       const [file] = await ctx.db.select().from(arkFiles).where(eq(arkFiles.id, input.avatarFileId)).limit(1)
       if (!canUseFileAsProfileAvatar(file, arkUser.id))
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Avatar file is invalid.' })
+        throw new ArkActionError({ code: 'BAD_REQUEST', message: 'Avatar file is invalid.' })
     }
 
-    const [updated] = await ctx.db.update(arkUsers).set({
+    const services = createArkResourceServices({
+      accountability: arkActionResourceAccountability(ctx, {
+        arkUserId: arkUser.id,
+      }),
+      authorization: 'domain',
+      database: ctx.db,
+    })
+    const updated = await services.resource('ark.users').update(arkUser.id, {
       ...(input.avatarFileId !== undefined ? { avatarFileId: input.avatarFileId } : {}),
       bio: input.bio,
       displayName: input.displayName,
       handle: input.handle,
       profileJson: input.profileJson,
       updatedAt: new Date(),
-    }).where(eq(arkUsers.id, arkUser.id)).returning()
-    return updated ?? null
+    })
+    return updated
   }),
-  updateSettings: arkUserProcedure.input(userSettingsUpdateSchema).mutation(async ({ ctx, input }) => {
+  updateSettings: arkUserAction.input(userSettingsUpdateSchema).mutation(async ({ ctx, input }) => {
     const arkUser = await ctx.auth.arkUser()
     if (!arkUser)
-      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
+      throw new ArkActionError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
     const [settings] = await ctx.db.insert(arkUserSettings).values({
       agentJson: input.agentJson ?? {},
       appearanceJson: input.appearanceJson ?? {},

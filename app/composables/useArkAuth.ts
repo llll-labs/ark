@@ -2,6 +2,7 @@ import { emailOTPClient, genericOAuthClient } from 'better-auth/client/plugins'
 import { createAuthClient } from 'better-auth/vue'
 import { storeToRefs } from 'pinia'
 import { useArkAuthRuntimeStore } from '../stores/arkAuthRuntime'
+import { arkApiErrorMessage } from '../utils/arkApiError'
 
 export const arkAuthClient = createAuthClient({
   plugins: [emailOTPClient(), genericOAuthClient()],
@@ -17,19 +18,6 @@ interface ArkAuthRegisterInput {
   email: string
   name?: string
   password: string
-}
-
-function authErrorMessage(error: unknown, fallback: string) {
-  if (error instanceof Error && error.message)
-    return error.message
-  if (error && typeof error === 'object') {
-    const data = 'data' in error ? (error as { data?: any }).data : null
-    if (data?.statusMessage)
-      return String(data.statusMessage)
-    if (data?.message)
-      return String(data.message)
-  }
-  return fallback
 }
 
 function defaultName(email: string) {
@@ -70,7 +58,7 @@ export function useArkAuth() {
       return await runtime.check(true)
     }
     catch (cause) {
-      error.value = authErrorMessage(cause, 'Login failed')
+      error.value = arkApiErrorMessage(cause, 'Login failed')
       throw new Error(error.value)
     }
   }
@@ -92,7 +80,7 @@ export function useArkAuth() {
       return { verificationRequired: true }
     }
     catch (cause) {
-      error.value = authErrorMessage(cause, 'Registration failed')
+      error.value = arkApiErrorMessage(cause, 'Registration failed')
       throw new Error(error.value)
     }
   }
@@ -112,7 +100,7 @@ export function useArkAuth() {
       return { sent: true }
     }
     catch (cause) {
-      error.value = authErrorMessage(cause, 'Password reset request failed')
+      error.value = arkApiErrorMessage(cause, 'Password reset request failed')
       throw new Error(error.value)
     }
   }
@@ -129,7 +117,7 @@ export function useArkAuth() {
       return { reset: true }
     }
     catch (cause) {
-      error.value = authErrorMessage(cause, 'Password reset failed')
+      error.value = arkApiErrorMessage(cause, 'Password reset failed')
       throw new Error(error.value)
     }
   }
@@ -146,7 +134,7 @@ export function useArkAuth() {
       return { sent: true }
     }
     catch (cause) {
-      error.value = authErrorMessage(cause, 'Verification code send failed')
+      error.value = arkApiErrorMessage(cause, 'Verification code send failed')
       throw new Error(error.value)
     }
   }
@@ -167,7 +155,7 @@ export function useArkAuth() {
       return await runtime.check(true)
     }
     catch (cause) {
-      error.value = authErrorMessage(cause, 'Verification failed')
+      error.value = arkApiErrorMessage(cause, 'Verification failed')
       throw new Error(error.value)
     }
   }
@@ -184,7 +172,7 @@ export function useArkAuth() {
       return await runtime.check(true)
     }
     catch (cause) {
-      error.value = authErrorMessage(cause, 'Telegram login failed')
+      error.value = arkApiErrorMessage(cause, 'Telegram login failed')
       throw new Error(error.value)
     }
   }
@@ -206,7 +194,7 @@ export function useArkAuth() {
       return result
     }
     catch (cause) {
-      error.value = authErrorMessage(cause, 'Telegram login failed')
+      error.value = arkApiErrorMessage(cause, 'Telegram login failed')
       throw new Error(error.value)
     }
   }
@@ -225,7 +213,7 @@ export function useArkAuth() {
       return await runtime.check(true)
     }
     catch (cause) {
-      error.value = authErrorMessage(cause, 'Profile completion failed')
+      error.value = arkApiErrorMessage(cause, 'Profile completion failed')
       throw new Error(error.value)
     }
   }
@@ -247,7 +235,7 @@ export function useArkAuth() {
       return result
     }
     catch (cause) {
-      error.value = authErrorMessage(cause, 'Discord login failed')
+      error.value = arkApiErrorMessage(cause, 'Discord login failed')
       throw new Error(error.value)
     }
   }

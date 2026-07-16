@@ -1,12 +1,14 @@
 import { publishedAtForCuration } from '../../../utils/market-jobs'
+import { withArkResourceTransaction } from '../../../resources/service'
 import {
   and,
-  arkUserProcedure,
+  arkActionResourceAccountability,
+  arkUserAction,
   arkUsers,
-  baseProcedure,
+  baseAction,
   byIdSchema,
   arkChannels,
-  createTRPCRouter,
+  createArkActionRouter,
   currentArkUserOrThrow,
   desc,
   emptyListSchema,
@@ -28,7 +30,7 @@ import {
   arkMarketTags,
   arkMarketTools,
   or,
-  protectedProcedure,
+  protectedAction,
   publicMarketJob,
   replaceJobTargets,
   replaceStoreTargets,
@@ -38,17 +40,17 @@ import {
   slugify,
   arkSpaces,
   sql,
-  TRPCError,
+  ArkActionError,
   withMarketJobDetails,
   withStoreDetails,
   z,
 } from './shared'
 
-export const marketRouter = createTRPCRouter({
-  options: baseProcedure.input(emptyListSchema).query(async ({ ctx }) => {
+export const marketRouter = createArkActionRouter({
+  options: baseAction.input(emptyListSchema).query(async ({ ctx }) => {
     const root = await ctx.auth.publicSpace()
     if (!root)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
+      throw new ArkActionError({ code: 'NOT_FOUND', message: 'Public space not found' })
     await requireSpaceAccess(root.id, ctx, 'market.access')
     const sourceRows = await ctx.db
       .selectDistinct({ source: arkMarketJobs.source })
@@ -67,21 +69,22 @@ export const marketRouter = createTRPCRouter({
       tools: await ctx.db.select().from(arkMarketTools).orderBy(arkMarketTools.position),
     }
   }),
-  stores: createTRPCRouter({
-    list: baseProcedure.input(marketStoreListSchema).query(async ({ ctx, input }) => {
+  stores: createArkActionRouter({
+    list: baseAction.input(marketStoreListSchema).query(async ({ ctx, input }) => {
       const root = await ctx.auth.publicSpace()
       if (!root)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Public space not found' })
       const rootAccess = await requireSpaceAccess(root.id, ctx, 'market.access')
       const filters = [
         eq(arkMarketStores.status, input.status && rootAccess.capabilities.includes('market.jobs.manage') ? input.status : 'active'),
+        isNull(arkMarketStores.deletedAt),
       ]
       if (input.ownerSpaceId)
         filters.push(eq(arkMarketStores.ownerSpaceId, input.ownerSpaceId))
       const rows = await ctx.db.select().from(arkMarketStores).where(and(...filters)).orderBy(desc(arkMarketStores.updatedAt)).limit(input.limit)
       return withStoreDetails(ctx, rows)
     }),
-    mine: protectedProcedure.input(emptyListSchema).query(async ({ ctx }) => {
+    mine: protectedAction.input(emptyListSchema).query(async ({ ctx }) => {
       const arkUser = await currentArkUserOrThrow(ctx)
       const spaceIds = await marketManageSpaceIds(ctx, arkUser.id)
       const rows = spaceIds.length
@@ -95,10 +98,11 @@ export const marketRouter = createTRPCRouter({
         manageableSpaceIds: spaceIds,
       }
     }),
-    upsert: arkUserProcedure.input(marketStoreUpsertSchema).mutation(async ({ ctx, input }) => {
+    upsert: arkUserAction.input(marketStoreUpsertSchema).mutation(async ({ ctx, input }) => {
       const owner = await requireStoreOwnerInput(ctx, input)
+      const access = await requireSpaceAccess(owner.ownerSpaceId, ctx, 'market.jobs.manage')
       const existing = input.id
-        ? (await ctx.db.select().from(arkMarketStores).where(eq(arkMarketStores.id, input.id)).limit(1))[0]
+        ? (await ctx.db.select().from(arkMarketStores).where(and(eq(arkMarketStores.id, input.id), isNull(arkMarketStores.deletedAt))).limit(1))[0]
         : (await ctx.db.select().from(arkMarketStores).where(and(
             eq(arkMarketStores.ownerSpaceId, owner.ownerSpaceId),
             isNull(arkMarketStores.deletedAt),
@@ -126,76 +130,109 @@ export const marketRouter = createTRPCRouter({
         verificationJson: input.verificationJson,
         updatedAt: new Date(),
       }
-      const [store] = existing
-        ? await ctx.db.update(arkMarketStores).set(values).where(eq(arkMarketStores.id, existing.id)).returning()
-        : await ctx.db.insert(arkMarketStores).values(values).returning()
-      if (!store)
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Store was not saved.' })
-
-      await replaceStoreTargets(ctx, store.id, input)
+      const accountability = arkActionResourceAccountability(ctx, {
+          arkUserId: owner.arkUser.id,
+          capabilities: access.capabilities,
+          spaceId: owner.ownerSpaceId,
+        })
+      const saveStore = (current: typeof arkMarketStores.$inferSelect | undefined) => withArkResourceTransaction({
+          accountability,
+          authorization: 'domain',
+          database: ctx.db,
+        }, async ({ database, services }) => {
+          const saved = current
+          ? await services.resource('ark.market_stores').update(current.id, values)
+          : await services.resource('ark.market_stores').create(values)
+          await replaceStoreTargets({ db: database }, saved.id as string, input)
+          return saved as typeof arkMarketStores.$inferSelect
+        })
+      let store: typeof arkMarketStores.$inferSelect
+      try {
+        store = await saveStore(existing)
+      }
+      catch (error) {
+        if (existing)
+          throw error
+        const [raceWinner] = await ctx.db.select().from(arkMarketStores).where(and(
+          eq(arkMarketStores.ownerSpaceId, owner.ownerSpaceId),
+          isNull(arkMarketStores.deletedAt),
+        )).limit(1)
+        if (!raceWinner)
+          throw error
+        store = await saveStore(raceWinner)
+      }
       return (await withStoreDetails(ctx, [store]))[0]
     }),
-    review: arkUserProcedure.input(z.object({
+    review: arkUserAction.input(z.object({
       action: z.enum(['approve', 'reject']),
       id: z.uuid(),
       reviewNote: z.string().max(2000).optional(),
     })).mutation(async ({ ctx, input }) => {
       const root = await ctx.auth.publicSpace()
       if (!root)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
-      await requireSpaceAccess(root.id, ctx, 'market.jobs.manage')
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Public space not found' })
+      const access = await requireSpaceAccess(root.id, ctx, 'market.jobs.manage')
       const reviewer = await currentArkUserOrThrow(ctx)
-      const [store] = await ctx.db.select().from(arkMarketStores).where(eq(arkMarketStores.id, input.id)).limit(1)
+      const [store] = await ctx.db.select().from(arkMarketStores).where(and(eq(arkMarketStores.id, input.id), isNull(arkMarketStores.deletedAt))).limit(1)
       if (!store)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Store not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Store not found' })
 
-      const [updated] = await ctx.db.update(arkMarketStores).set({
-        reviewNote: input.reviewNote ?? null,
-        reviewedAt: new Date(),
-        reviewedByArkUserId: reviewer.id,
-        status: input.action === 'approve' ? 'active' : 'rejected',
-        updatedAt: new Date(),
-      }).where(eq(arkMarketStores.id, store.id)).returning()
-      if (!updated)
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Store review was not saved.' })
+      const updated = await withArkResourceTransaction({
+        accountability: arkActionResourceAccountability(ctx, {
+          arkUserId: reviewer.id,
+          capabilities: access.capabilities,
+          spaceId: store.ownerSpaceId,
+        }),
+        authorization: 'domain',
+        database: ctx.db,
+      }, async ({ database, services }) => {
+        const saved = await services.resource('ark.market_stores').update(store.id, {
+          reviewNote: input.reviewNote ?? null,
+          reviewedAt: new Date(),
+          reviewedByArkUserId: reviewer.id,
+          status: input.action === 'approve' ? 'active' : 'rejected',
+          updatedAt: new Date(),
+        }) as typeof arkMarketStores.$inferSelect
 
-      // Write the onboarding outcome back to the owning space's owner user.
-      const [ownerSpace] = await ctx.db.select().from(arkSpaces).where(eq(arkSpaces.id, store.ownerSpaceId)).limit(1)
-      if (ownerSpace?.ownerArkUserId) {
-        const [owner] = await ctx.db.select().from(arkUsers).where(eq(arkUsers.id, ownerSpace.ownerArkUserId)).limit(1)
-        if (owner) {
-          const profileJson = owner.profileJson && typeof owner.profileJson === 'object' && !Array.isArray(owner.profileJson)
-            ? owner.profileJson as Record<string, any>
-            : {}
-          const onboarding = profileJson.onboarding && typeof profileJson.onboarding === 'object' && !Array.isArray(profileJson.onboarding)
-            ? profileJson.onboarding as Record<string, any>
-            : {}
-          const approved = input.action === 'approve'
-          await ctx.db.update(arkUsers).set({
-            profileJson: {
-              ...profileJson,
-              onboarding: {
-                ...onboarding,
-                completed: approved,
-                completedAt: approved ? new Date().toISOString() : onboarding.completedAt,
-                storeIds: [store.id],
-                reviewNote: input.reviewNote ?? null,
-                reviewStatus: approved ? 'active' : 'rejected',
-                role: 'seller',
+        // Write the onboarding outcome back to the owning space's owner user.
+        const [ownerSpace] = await database.select().from(arkSpaces).where(eq(arkSpaces.id, store.ownerSpaceId)).limit(1)
+        if (ownerSpace?.ownerArkUserId) {
+          const [owner] = await database.select().from(arkUsers).where(eq(arkUsers.id, ownerSpace.ownerArkUserId)).limit(1)
+          if (owner) {
+            const profileJson = owner.profileJson && typeof owner.profileJson === 'object' && !Array.isArray(owner.profileJson)
+              ? owner.profileJson as Record<string, any>
+              : {}
+            const onboarding = profileJson.onboarding && typeof profileJson.onboarding === 'object' && !Array.isArray(profileJson.onboarding)
+              ? profileJson.onboarding as Record<string, any>
+              : {}
+            const approved = input.action === 'approve'
+            await services.resource('ark.users').update(owner.id, {
+              profileJson: {
+                ...profileJson,
+                onboarding: {
+                  ...onboarding,
+                  completed: approved,
+                  completedAt: approved ? new Date().toISOString() : onboarding.completedAt,
+                  storeIds: [store.id],
+                  reviewNote: input.reviewNote ?? null,
+                  reviewStatus: approved ? 'active' : 'rejected',
+                  role: 'seller',
+                },
+                onboarding_completed: approved,
+                onboarding_pending_review: false,
               },
-              onboarding_completed: approved,
-              onboarding_pending_review: false,
-            },
-            updatedAt: new Date(),
-          }).where(eq(arkUsers.id, owner.id))
+              updatedAt: new Date(),
+            })
+          }
         }
-      }
+        return saved
+      })
 
       return (await withStoreDetails(ctx, [updated]))[0]
     }),
   }),
-  jobs: createTRPCRouter({
-    list: baseProcedure.input(z.object({
+  jobs: createArkActionRouter({
+    list: baseAction.input(z.object({
       admin: z.boolean().default(false),
       categoryId: z.string().uuid().optional(),
       curation: z.string().max(40).optional(),
@@ -211,12 +248,12 @@ export const marketRouter = createTRPCRouter({
     }).default({ admin: false, limit: 10, offset: 0, sort: 'newest' })).query(async ({ ctx, input }) => {
       const root = await ctx.auth.publicSpace()
       if (!root)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Public space not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Public space not found' })
       const access = await requireSpaceAccess(root.id, ctx, 'market.access')
       const canManage = access.capabilities.includes('market.jobs.manage')
       const adminView = canManage && input.admin
 
-      const conditions: any[] = []
+      const conditions: any[] = [isNull(arkMarketJobs.deletedAt)]
       if (input.spaceId)
         conditions.push(eq(arkMarketJobs.spaceId, input.spaceId))
       if (!adminView) {
@@ -268,26 +305,26 @@ export const marketRouter = createTRPCRouter({
         total: Number(totals?.total ?? 0),
       }
     }),
-    byId: baseProcedure.input(byIdSchema).query(async ({ ctx, input }) => {
-      const [job] = await ctx.db.select().from(arkMarketJobs).where(eq(arkMarketJobs.id, input.id)).limit(1)
+    byId: baseAction.input(byIdSchema).query(async ({ ctx, input }) => {
+      const [job] = await ctx.db.select().from(arkMarketJobs).where(and(eq(arkMarketJobs.id, input.id), isNull(arkMarketJobs.deletedAt))).limit(1)
       if (!job)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Job not found' })
       const access = await requireSpaceAccess(job.spaceId, ctx, 'market.access')
       const canManage = access.capabilities.includes('market.jobs.manage')
       if (!canManage && (job.curationStatus === 'hidden' || job.status === 'archived')) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Job not found' })
       }
       const detailed = (await withMarketJobDetails(ctx, [job]))[0]
       if (!detailed)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Job not found' })
       return canManage ? detailed : publicMarketJob(detailed)
     }),
-    upsert: arkUserProcedure.input(marketJobUpsertSchema).mutation(async ({ ctx, input }) => {
+    upsert: arkUserAction.input(marketJobUpsertSchema).mutation(async ({ ctx, input }) => {
       const { categoryIds, tagIds, ...jobInput } = input
       const root = input.spaceId ? null : await ctx.auth.publicSpace()
       const spaceId = input.spaceId ?? root?.id
       if (!spaceId)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Target space not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Target space not found' })
       await requireSpaceAccess(spaceId, ctx, 'market.access')
       const imported = Boolean(input.source || input.externalId)
       const access = await requireSpaceAccess(spaceId, ctx, imported ? 'market.jobs.import' : 'market.jobs.manage')
@@ -295,39 +332,58 @@ export const marketRouter = createTRPCRouter({
         ? (await ctx.db.select().from(arkMarketJobs).where(and(
             eq(arkMarketJobs.source, input.source),
             eq(arkMarketJobs.externalId, input.externalId),
+            isNull(arkMarketJobs.deletedAt),
           )).limit(1))[0]
         : null
       if (existing) {
         const publishedAt = publishedAtForCuration(jobInput.curationStatus, existing.publishedAt)
-        const [updated] = await ctx.db.update(arkMarketJobs).set({
-          ...jobInput,
-          ...(publishedAt !== undefined ? { publishedAt } : {}),
-          updatedAt: new Date(),
-        }).where(eq(arkMarketJobs.id, existing.id)).returning()
-        if (!updated)
-          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Job update did not return a row.' })
-        await replaceJobTargets(ctx, updated.id, { categoryIds, tagIds })
+        const updated = await withArkResourceTransaction({
+          accountability: arkActionResourceAccountability(ctx, {
+            arkUserId: access.arkUser?.id,
+            capabilities: access.capabilities,
+            spaceId,
+          }),
+          authorization: 'domain',
+          database: ctx.db,
+        }, async ({ database, services }) => {
+          const saved = await services.resource('ark.market_jobs').update(existing.id, {
+            ...jobInput,
+            ...(publishedAt !== undefined ? { publishedAt } : {}),
+            updatedAt: new Date(),
+          }) as typeof arkMarketJobs.$inferSelect
+          await replaceJobTargets({ db: database }, saved.id, { categoryIds, tagIds })
+          return saved
+        })
         return (await withMarketJobDetails(ctx, [updated]))[0]
       }
       const insertPublishedAt = publishedAtForCuration(jobInput.curationStatus, null)
-      const [job] = await ctx.db.insert(arkMarketJobs).values({
-        ...jobInput,
-        ...(insertPublishedAt !== undefined ? { publishedAt: insertPublishedAt } : {}),
-        budgetAmount: input.budgetAmount,
-        createdByArkUserId: access.arkUser?.id,
-        spaceId,
-      }).returning()
-      if (!job)
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Job insert did not return a row.' })
-      await replaceJobTargets(ctx, job.id, { categoryIds, tagIds })
+      const job = await withArkResourceTransaction({
+        accountability: arkActionResourceAccountability(ctx, {
+          arkUserId: access.arkUser?.id,
+          capabilities: access.capabilities,
+          spaceId,
+        }),
+        authorization: 'domain',
+        database: ctx.db,
+      }, async ({ database, services }) => {
+        const created = await services.resource('ark.market_jobs').create({
+          ...jobInput,
+          ...(insertPublishedAt !== undefined ? { publishedAt: insertPublishedAt } : {}),
+          budgetAmount: input.budgetAmount,
+          createdByArkUserId: access.arkUser?.id,
+          spaceId,
+        }) as typeof arkMarketJobs.$inferSelect
+        await replaceJobTargets({ db: database }, created.id, { categoryIds, tagIds })
+        return created
+      })
       return (await withMarketJobDetails(ctx, [job]))[0]
     }),
-    curate: arkUserProcedure.input(marketJobCurationSchema).mutation(async ({ ctx, input }) => {
-      const [job] = await ctx.db.select().from(arkMarketJobs).where(eq(arkMarketJobs.id, input.id)).limit(1)
+    curate: arkUserAction.input(marketJobCurationSchema).mutation(async ({ ctx, input }) => {
+      const [job] = await ctx.db.select().from(arkMarketJobs).where(and(eq(arkMarketJobs.id, input.id), isNull(arkMarketJobs.deletedAt))).limit(1)
       if (!job)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Job not found' })
       await requireSpaceAccess(job.spaceId, ctx, 'market.access')
-      await requireSpaceAccess(job.spaceId, ctx, 'market.jobs.manage')
+      const access = await requireSpaceAccess(job.spaceId, ctx, 'market.jobs.manage')
       const now = new Date()
       const nextCuration = input.action === 'approve' ? 'approved' as const : 'hidden' as const
       const nextValues = input.action === 'archive'
@@ -344,44 +400,78 @@ export const marketRouter = createTRPCRouter({
             publishedAt: publishedAtForCuration(nextCuration, job.publishedAt) ?? null,
             updatedAt: now,
           }
-      const [updated] = await ctx.db.update(arkMarketJobs).set({
-        ...nextValues,
-      }).where(eq(arkMarketJobs.id, job.id)).returning()
-      return updated
+      return withArkResourceTransaction({
+        accountability: arkActionResourceAccountability(ctx, {
+          arkUserId: access.arkUser?.id,
+          capabilities: access.capabilities,
+          spaceId: job.spaceId,
+        }),
+        authorization: 'domain',
+        database: ctx.db,
+      }, ({ services }) => services.resource('ark.market_jobs').update(job.id, nextValues))
     }),
-    startDiscussion: arkUserProcedure.input(byIdSchema).mutation(async ({ ctx, input }) => {
-      const [job] = await ctx.db.select().from(arkMarketJobs).where(eq(arkMarketJobs.id, input.id)).limit(1)
+    startDiscussion: arkUserAction.input(byIdSchema).mutation(async ({ ctx, input }) => {
+      const [job] = await ctx.db.select().from(arkMarketJobs).where(and(eq(arkMarketJobs.id, input.id), isNull(arkMarketJobs.deletedAt))).limit(1)
       if (!job)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Job not found' })
       const access = await requireSpaceAccess(job.spaceId, ctx, 'market.access')
       await requireSpaceAccess(job.spaceId, ctx, 'market.jobs.read')
       if (!access.capabilities.includes('market.jobs.manage') && (job.curationStatus === 'hidden' || job.status === 'archived')) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Job not found' })
+        throw new ArkActionError({ code: 'NOT_FOUND', message: 'Job not found' })
       }
       if (job.discussionChannelId) {
-        const [channel] = await ctx.db.select().from(arkChannels).where(eq(arkChannels.id, job.discussionChannelId)).limit(1)
-        return { channel, job }
+        const [channel] = await ctx.db.select().from(arkChannels).where(and(
+          eq(arkChannels.id, job.discussionChannelId),
+          isNull(arkChannels.deletedAt),
+        )).limit(1)
+        if (channel)
+          return { channel, job }
       }
       const arkUser = await ctx.auth.arkUser()
-      const [channel] = await ctx.db.insert(arkChannels).values({
-        createdByArkUserId: arkUser?.id,
-        kind: 'job_discussion',
-        name: job.title,
-        slug: `job-${job.id.slice(0, 8)}-${slugify(job.title).slice(0, 40)}`,
-        spaceId: job.spaceId,
-        targetId: job.id,
-        targetType: 'job',
-        topic: 'Job discussion',
-        visibility: 'space',
-      }).returning()
-      if (!channel)
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Discussion channel could not be created' })
-      const [updated] = await ctx.db.update(arkMarketJobs).set({
-        discussionChannelId: channel.id,
-        status: 'responding',
-        updatedAt: new Date(),
-      }).where(eq(arkMarketJobs.id, job.id)).returning()
-      return { channel, job: updated }
+      const identityKey = `job-discussion:${job.id}`
+      try {
+        return await withArkResourceTransaction({
+          accountability: arkActionResourceAccountability(ctx, {
+            arkUserId: arkUser?.id,
+            capabilities: access.capabilities,
+            spaceId: job.spaceId,
+          }),
+          authorization: 'domain',
+          database: ctx.db,
+        }, async ({ services }) => {
+          const channel = await services.resource('ark.channels').create({
+            createdByArkUserId: arkUser?.id,
+            identityKey,
+            kind: 'job_discussion',
+            name: job.title,
+            slug: `job-${job.id.slice(0, 8)}-${slugify(job.title).slice(0, 40)}`,
+            spaceId: job.spaceId,
+            targetId: job.id,
+            targetType: 'job',
+            topic: 'Job discussion',
+            visibility: 'space',
+          }) as typeof arkChannels.$inferSelect
+          const updated = await services.resource('ark.market_jobs').update(job.id, {
+            discussionChannelId: channel.id,
+            status: 'responding',
+            updatedAt: new Date(),
+          }) as typeof arkMarketJobs.$inferSelect
+          return { channel, job: updated }
+        })
+      }
+      catch (error) {
+        const [winnerJob] = await ctx.db.select().from(arkMarketJobs).where(and(
+          eq(arkMarketJobs.id, job.id),
+          isNull(arkMarketJobs.deletedAt),
+        )).limit(1)
+        const [winnerChannel] = await ctx.db.select().from(arkChannels).where(and(
+          eq(arkChannels.identityKey, identityKey),
+          isNull(arkChannels.deletedAt),
+        )).limit(1)
+        if (winnerJob?.discussionChannelId && winnerChannel?.id === winnerJob.discussionChannelId)
+          return { channel: winnerChannel, job: winnerJob }
+        throw error
+      }
     }),
   }),
 })

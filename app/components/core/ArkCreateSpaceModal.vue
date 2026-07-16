@@ -13,7 +13,7 @@ const emit = defineEmits<{
 
 const open = defineModel<boolean>('open', { default: false })
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const { t } = useI18n()
 const { error: errorMessage, pending, run } = useAsyncAction()
 
@@ -50,7 +50,7 @@ async function submit() {
   if (!props.parentSpaceId || !form.name.trim())
     return
   const space = await run(async () => {
-    const created = await $trpc.ark.spaces.create.mutate({
+    const created = await $arkApi.mutate("spaces.create", {
       inheritAccess: form.inheritAccess,
       kind: form.kind as any,
       name: form.name.trim(),

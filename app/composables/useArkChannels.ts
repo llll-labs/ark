@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/vue-query'
 import type { MaybeRefOrGetter } from 'vue'
+import type { ArkMutationInput } from '../plugins/ark-api'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, toValue } from 'vue'
 
@@ -19,7 +20,7 @@ export type ArkMessagePageParam
     | { mode: 'latest' }
 
 export const arkChannelQueryKeys = {
-  all: ['trpc', 'ark', 'channels'] as const,
+  all: ['rest', 'ark', 'channels'] as const,
   detail: (channelId: string) => [...arkChannelQueryKeys.all, 'detail', channelId] as const,
   list: (spaceId: string) => [...arkChannelQueryKeys.all, 'list', spaceId] as const,
   messages: (channelId: string) => [...arkChannelQueryKeys.all, 'messages', channelId] as const,
@@ -54,12 +55,12 @@ function deDupeMessages(items: any[]) {
 }
 
 export function useArkChannelQuery(channelId: MaybeRefOrGetter<string>) {
-  const { $trpc } = useNuxtApp()
+  const { $arkApi } = useNuxtApp()
   const resolvedChannelId = computed(() => toValue(channelId))
 
   return useQuery({
     enabled: computed(() => resolvedChannelId.value.length > 0),
-    queryFn: () => $trpc.ark.channels.byId.query({ id: resolvedChannelId.value }),
+    queryFn: () => $arkApi.query("channels.byId", { id: resolvedChannelId.value }),
     queryKey: computed(() => arkChannelQueryKeys.detail(resolvedChannelId.value)),
   })
 }
@@ -69,7 +70,7 @@ export function useArkMessageWindowQuery(
   anchor: MaybeRefOrGetter<ArkMessageAnchor>,
   limit: MaybeRefOrGetter<number> = 50,
 ) {
-  const { $trpc } = useNuxtApp()
+  const { $arkApi } = useNuxtApp()
   const resolvedChannelId = computed(() => toValue(channelId))
   const resolvedAnchor = computed(() => toValue(anchor))
   const resolvedLimit = computed(() => toValue(limit))
@@ -77,33 +78,33 @@ export function useArkMessageWindowQuery(
   const query = useInfiniteQuery<any, Error, any, any, ArkMessagePageParam>({
     enabled: computed(() => resolvedChannelId.value.length > 0),
     getNextPageParam: (lastPage: any) => {
-      if (!lastPage.hasNewer || !lastPage.newerCursor)
+      if (!lastPage.nextCursor)
         return undefined
-      return { cursor: lastPage.newerCursor, mode: 'after' as const }
+      return { cursor: lastPage.nextCursor, mode: 'after' as const }
     },
     getPreviousPageParam: (firstPage: any) => {
-      if (!firstPage.hasOlder || !firstPage.olderCursor)
+      if (!firstPage.prevCursor)
         return undefined
-      return { cursor: firstPage.olderCursor, mode: 'before' as const }
+      return { cursor: firstPage.prevCursor, mode: 'before' as const }
     },
     initialPageParam: { mode: 'latest' },
     queryFn: ({ pageParam }) => {
       if (pageParam.mode === 'before') {
-        return $trpc.ark.messages.before.query({
+        return $arkApi.query("messages.before", {
           channelId: resolvedChannelId.value,
           cursor: pageParam.cursor,
           limit: resolvedLimit.value,
         })
       }
       if (pageParam.mode === 'after') {
-        return $trpc.ark.messages.after.query({
+        return $arkApi.query("messages.after", {
           channelId: resolvedChannelId.value,
           cursor: pageParam.cursor,
           limit: resolvedLimit.value,
         })
       }
       if (pageParam.mode === 'around') {
-        return $trpc.ark.messages.around.query({
+        return $arkApi.query("messages.around", {
           after: resolvedLimit.value,
           before: resolvedLimit.value,
           channelId: resolvedChannelId.value,
@@ -112,14 +113,14 @@ export function useArkMessageWindowQuery(
       }
       const anchorValue = resolvedAnchor.value
       if (anchorValue.mode === 'around') {
-        return $trpc.ark.messages.around.query({
+        return $arkApi.query("messages.around", {
           after: resolvedLimit.value,
           before: resolvedLimit.value,
           channelId: resolvedChannelId.value,
           messageId: anchorValue.messageId,
         })
       }
-      return $trpc.ark.messages.latest.query({
+      return $arkApi.query("messages.latest", {
         channelId: resolvedChannelId.value,
         limit: resolvedLimit.value,
       })
@@ -136,12 +137,12 @@ export function useArkMessageWindowQuery(
 }
 
 export function useArkPinnedMessagesQuery(channelId: MaybeRefOrGetter<string>) {
-  const { $trpc } = useNuxtApp()
+  const { $arkApi } = useNuxtApp()
   const resolvedChannelId = computed(() => toValue(channelId))
 
   return useQuery({
     enabled: computed(() => resolvedChannelId.value.length > 0),
-    queryFn: () => $trpc.ark.messages.pinned.query({
+    queryFn: () => $arkApi.query("messages.pinned", {
       channelId: resolvedChannelId.value,
       limit: 20,
     }),
@@ -150,24 +151,24 @@ export function useArkPinnedMessagesQuery(channelId: MaybeRefOrGetter<string>) {
 }
 
 export function useArkChannelStateQuery(channelId: MaybeRefOrGetter<string>) {
-  const { $trpc } = useNuxtApp()
+  const { $arkApi } = useNuxtApp()
   const resolvedChannelId = computed(() => toValue(channelId))
 
   return useQuery({
     enabled: computed(() => resolvedChannelId.value.length > 0),
-    queryFn: () => $trpc.ark.messages.state.query({ channelId: resolvedChannelId.value }),
+    queryFn: () => $arkApi.query("messages.state", { channelId: resolvedChannelId.value }),
     queryKey: computed(() => arkChannelQueryKeys.state(resolvedChannelId.value)),
     staleTime: 0,
   })
 }
 
 export function useArkMarkReadMutation() {
-  const { $trpc } = useNuxtApp()
+  const { $arkApi } = useNuxtApp()
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (input: { channelId: string, messageId?: string }) => {
-      return $trpc.ark.messages.markRead.mutate(input)
+      return $arkApi.mutate("messages.markRead", input)
     },
     onSuccess(state) {
       if (!state)
@@ -178,12 +179,12 @@ export function useArkMarkReadMutation() {
 }
 
 export function useArkMessageCreateMutation() {
-  const { $trpc } = useNuxtApp()
+  const { $arkApi } = useNuxtApp()
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (input: Parameters<typeof $trpc.ark.messages.create.mutate>[0]) => {
-      return $trpc.ark.messages.create.mutate(input)
+    mutationFn: (input: ArkMutationInput<'messages.create'>) => {
+      return $arkApi.mutate("messages.create", input)
     },
     onSuccess(message) {
       if (!message)
@@ -196,12 +197,12 @@ export function useArkMessageCreateMutation() {
 }
 
 export function useArkThreadUpsertMutation() {
-  const { $trpc } = useNuxtApp()
+  const { $arkApi } = useNuxtApp()
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (input: Parameters<typeof $trpc.ark.channels.upsertThreadForMessage.mutate>[0]) => {
-      return $trpc.ark.channels.upsertThreadForMessage.mutate(input)
+    mutationFn: (input: ArkMutationInput<'channels.upsertThreadForMessage'>) => {
+      return $arkApi.mutate("channels.upsertThreadForMessage", input)
     },
     onSuccess(channel) {
       if (!channel)

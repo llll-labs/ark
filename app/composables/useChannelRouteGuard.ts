@@ -9,11 +9,11 @@ export function useChannelRouteGuard(
   channelId: MaybeRefOrGetter<string>,
   options?: { jobRedirect?: (channel: any) => string },
 ) {
-  const { $trpc } = useNuxtApp()
+  const { $arkApi } = useNuxtApp()
   const id = computed(() => toValue(channelId))
   const { data: channel } = useAsyncData(
     `ark-channel-route-${id.value}`,
-    () => $trpc.ark.channels.byId.query({ id: id.value }),
+    () => $arkApi.query("channels.byId", { id: id.value }),
   )
 
   watch(channel, (value) => {

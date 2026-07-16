@@ -19,8 +19,15 @@
     "selectTable": "Select a table",
     "tabs": {
       "data": "Data",
+      "resources": "Resources",
       "views": "Views"
     },
+    "resourcesTitle": "Database Resources",
+    "resourcesHint": "Discover public tables and explicitly adopt them before Ark exposes Resource CRUD.",
+    "resourcePrimaryKey": "Primary key: {field}",
+    "resourceNoPrimaryKey": "No primary key; this table cannot be adopted.",
+    "resourceAdopted": "Adopted",
+    "resourceAdopt": "Adopt",
     "permissionsTitle": "Permissions",
     "permissionsHint": "Toggle capabilities per role. System roles are reseeded from code on boot.",
     "capability": "Capability",

@@ -20,7 +20,7 @@ const emit = defineEmits<{
 
 const open = defineModel<boolean>('open', { default: false })
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const { t } = useI18n()
 const { error: errorMessage, pending, run } = useAsyncAction()
 
@@ -41,7 +41,7 @@ useArkEscapeDismiss(open, close)
 async function submit() {
   if (!memberArkUserIds.value.length)
     return
-  const channel = await run(() => $trpc.ark.channels.upsertDm.mutate({ memberArkUserIds: memberArkUserIds.value }), { errorFallback: t('modals.dmCreateFailed') })
+  const channel = await run(() => $arkApi.mutate("channels.upsertDm", { memberArkUserIds: memberArkUserIds.value }), { errorFallback: t('modals.dmCreateFailed') })
   if (!channel)
     return
   emit('created', channel as CreatedChannel)

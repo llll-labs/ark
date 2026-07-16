@@ -1,5 +1,3 @@
-import type { AppRouter } from '../server/trpc/routers'
-import { createTRPCProxyClient, httpBatchLink } from '@trpc/client'
 import '../server/utils/env'
 
 const CHANNEL_SLUG = process.env.STRESS_CHANNEL_SLUG ?? 'war-and-peace'
@@ -15,11 +13,9 @@ interface Cursor {
 
 interface WindowResult {
   anchorMessageId?: string
-  hasNewer: boolean
-  hasOlder: boolean
   items: Array<{ createdAt: string | Date, id: string }>
-  newerCursor: Cursor | null
-  olderCursor: Cursor | null
+  nextCursor: Cursor | null
+  prevCursor: Cursor | null
 }
 
 function cookieHeaderFrom(response: Response) {
@@ -75,16 +71,32 @@ async function login() {
   return cookie
 }
 
-async function collectPinned(trpc: ReturnType<typeof createTRPCProxyClient<AppRouter>>, channelId: string) {
+function kebabCase(value: string) {
+  return value.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()
+}
+
+async function query(path: string, input: unknown, cookie: string): Promise<any> {
+  const parts = path.split('.')
+  const operation = parts.pop()!
+  const route = [...parts.map(kebabCase), ...(operation === 'list' ? [] : [kebabCase(operation)])].join('/')
+  const url = new URL(`/api/ark/${route}`, BASE_URL)
+  url.searchParams.set('input', JSON.stringify(input))
+  const response = await fetch(url, { headers: { cookie } })
+  if (!response.ok)
+    throw new Error(`GET ${url.pathname} failed: HTTP ${response.status} ${await response.text()}`)
+  return (await response.json()).data
+}
+
+async function collectPinned(cookie: string, channelId: string) {
   const items: Array<{ message: { id: string, createdAt: string | Date }, pin: { id: string } }> = []
   let cursor: Cursor | undefined
 
   for (let page = 0; page < 20; page += 1) {
-    const result = await trpc.ark.messages.pinned.query({
+    const result = await query('messages.pinned', {
       channelId,
       cursor,
       limit: 100,
-    })
+    }, cookie)
     items.push(...result.items)
     cursor = result.nextCursor ?? undefined
     if (!result.hasMore || !cursor)
@@ -96,51 +108,42 @@ async function collectPinned(trpc: ReturnType<typeof createTRPCProxyClient<AppRo
 
 async function main() {
   const cookie = await login()
-  const trpc = createTRPCProxyClient<AppRouter>({
-    links: [
-      httpBatchLink({
-        headers: () => ({ cookie }),
-        url: `${BASE_URL}/api/trpc`,
-      }),
-    ],
-  })
-
-  const spaces = await trpc.ark.spaces.list.query({})
+  const spaces = await query('spaces.list', {}, cookie)
   const root = spaces[0]
   if (!root)
     throw new Error('No readable spaces found.')
 
-  const channels = await trpc.ark.channels.list.query({ spaceId: root.id })
-  const channel = channels.find(row => row.slug === CHANNEL_SLUG)
+  const channels = await query('channels.list', { spaceId: root.id }, cookie)
+  const channel = channels.find((row: { id: string, slug: string }) => row.slug === CHANNEL_SLUG)
   if (!channel)
     throw new Error(`#${CHANNEL_SLUG} was not found. Run: ALLOW_STRESS_SEED=1 tsx scripts/seed-war-and-peace.ts`)
 
-  const latest = await trpc.ark.messages.latest.query({ channelId: channel.id, limit: 50 })
+  const latest = await query('messages.latest', { channelId: channel.id, limit: 50 }, cookie)
   if (latest.items.length !== 50)
     throw new Error(`latest returned ${latest.items.length} items; expected 50.`)
-  if (!latest.hasOlder || !latest.olderCursor || !latest.newerCursor)
-    throw new Error('latest did not expose older/newer cursors for the stress channel.')
+  if (!latest.prevCursor)
+    throw new Error('latest did not expose a previous cursor for the stress channel.')
   assertChronological('latest', latest.items)
 
-  const before = await trpc.ark.messages.before.query({
+  const before = await query('messages.before', {
     channelId: channel.id,
-    cursor: latest.olderCursor,
+    cursor: latest.prevCursor,
     limit: 50,
-  })
-  if (!before.items.length || !before.newerCursor)
-    throw new Error('before returned no items or no newer cursor.')
+  }, cookie)
+  if (!before.items.length || !before.nextCursor)
+    throw new Error('before returned no items or no next cursor.')
   assertChronological('before', before.items)
 
-  const after = await trpc.ark.messages.after.query({
+  const after = await query('messages.after', {
     channelId: channel.id,
-    cursor: before.newerCursor,
+    cursor: before.nextCursor,
     limit: 50,
-  })
+  }, cookie)
   if (!after.items.length)
     throw new Error('after returned no items.')
   assertChronological('after', after.items)
 
-  const pinned = await collectPinned(trpc, channel.id)
+  const pinned = await collectPinned(cookie, channel.id)
   if (pinned.length < 50)
     throw new Error(`pinned returned ${pinned.length} pins; expected chapter-level pins.`)
 
@@ -151,12 +154,12 @@ async function main() {
   ]
   const sampleMessageIds = [...new Set(sampleIndexes.map(index => pinned[index]!.message.id))]
   for (const messageId of sampleMessageIds) {
-    const around = await trpc.ark.messages.around.query({
+    const around = await query('messages.around', {
       after: 10,
       before: 10,
       channelId: channel.id,
       messageId,
-    })
+    }, cookie)
     assertBoundedAround(around, messageId, 21)
   }
 

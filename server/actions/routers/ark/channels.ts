@@ -1,16 +1,18 @@
 import type { ArkUserRow } from './shared'
+import { withArkResourceTransaction } from '../../../resources/service'
 import {
   and,
-  arkUserProcedure,
+  arkActionResourceAccountability,
+  arkUserAction,
   arkUsers,
   asc,
-  baseProcedure,
+  baseAction,
   byIdSchema,
   arkChannelCategories,
   channelCreateSchema,
   arkChannelMembers,
   arkChannels,
-  createTRPCRouter,
+  createArkActionRouter,
   desc,
   dmUpsertSchema,
   ensureDefaultChannelCategory,
@@ -39,14 +41,14 @@ import {
   olderMessageThan,
   olderPinThan,
   parseCursorDate,
-  protectedProcedure,
+  protectedAction,
   publishChatEvent,
   requireSpaceAccess,
   requireVisibleArkUsers,
   slugify,
   spaceScopedListSchema,
   sql,
-  TRPCError,
+  ArkActionError,
   arkUserChannelStates,
   withMessageDetails,
   z,
@@ -57,8 +59,8 @@ const channelLookupSchema = z.object({
 })
 const uuidInput = z.uuid()
 
-export const channelCategoriesRouter = createTRPCRouter({
-  list: baseProcedure.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
+export const channelCategoriesRouter = createArkActionRouter({
+  list: baseAction.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
     await requireSpaceAccess(input.spaceId, ctx, 'channels.read')
     return ctx.db.select().from(arkChannelCategories).where(and(
       eq(arkChannelCategories.spaceId, input.spaceId),
@@ -67,8 +69,8 @@ export const channelCategoriesRouter = createTRPCRouter({
   }),
 })
 
-export const channelsRouter = createTRPCRouter({
-  byId: baseProcedure.input(channelLookupSchema).query(async ({ ctx, input }) => {
+export const channelsRouter = createArkActionRouter({
+  byId: baseAction.input(channelLookupSchema).query(async ({ ctx, input }) => {
     let channelId = input.id
     if (!uuidInput.safeParse(channelId).success) {
       const root = await ctx.auth.publicSpace()
@@ -84,12 +86,12 @@ export const channelsRouter = createTRPCRouter({
 
     const access = await ctx.auth.canReadChannel(channelId)
     if (!access.channel)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Channel not found' })
+      throw new ArkActionError({ code: 'NOT_FOUND', message: 'Channel not found' })
     if (!access.allowed)
-      throw new TRPCError({ code: 'FORBIDDEN', message: access.reason ?? 'Channel access denied' })
+      throw new ArkActionError({ code: 'FORBIDDEN', message: access.reason ?? 'Channel access denied' })
     return access.channel
   }),
-  participants: baseProcedure.input(byIdSchema).query(async ({ ctx, input }) => {
+  participants: baseAction.input(byIdSchema).query(async ({ ctx, input }) => {
     const { channel } = await getChannelForAccess(input.id, ctx, 'messages.read')
     const rows = await ctx.db
       .select({
@@ -135,7 +137,7 @@ export const channelsRouter = createTRPCRouter({
       user: authorById.get(row.arkUserId!) ?? null,
     })).filter((participant: { user: unknown }) => Boolean(participant.user))
   }),
-  list: baseProcedure.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
+  list: baseAction.input(spaceScopedListSchema).query(async ({ ctx, input }) => {
     await requireSpaceAccess(input.spaceId, ctx, 'channels.read')
     const rows = await ctx.db.select().from(arkChannels).where(eq(arkChannels.spaceId, input.spaceId)).orderBy(arkChannels.position, arkChannels.createdAt)
     const readable = []
@@ -146,7 +148,7 @@ export const channelsRouter = createTRPCRouter({
     }
     return readable
   }),
-  create: arkUserProcedure.input(channelCreateSchema).mutation(async ({ ctx, input }) => {
+  create: arkUserAction.input(channelCreateSchema).mutation(async ({ ctx, input }) => {
     const access = await requireSpaceAccess(input.spaceId, ctx, 'channels.create')
     await requireVisibleArkUsers(ctx, input.memberArkUserIds)
     const arkUser = access.arkUser ?? await ctx.auth.arkUser()
@@ -157,7 +159,7 @@ export const channelsRouter = createTRPCRouter({
         isNull(arkChannelCategories.deletedAt),
       )).limit(1)
       if (!category || category.spaceId !== input.spaceId) {
-        throw new TRPCError({
+        throw new ArkActionError({
           code: 'BAD_REQUEST',
           message: 'Channel category must belong to the selected space.',
         })
@@ -167,70 +169,101 @@ export const channelsRouter = createTRPCRouter({
       const category = await ensureDefaultChannelCategory(input.spaceId)
       categoryId = category.id
     }
-    const [channel] = await ctx.db.insert(arkChannels).values({
-      categoryId,
-      createdByArkUserId: arkUser?.id,
-      kind: input.kind,
-      name: input.name,
-      slug: input.slug ?? slugify(input.name),
-      spaceId: input.spaceId,
-      targetId: input.targetId,
-      targetType: input.targetType,
-      visibility: input.visibility,
-    }).returning()
-    if (!channel)
-      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Channel could not be created' })
-    if ((channel.visibility === 'private' || channel.kind === 'dm') && arkUser) {
-      const memberIds = new Set([arkUser.id, ...input.memberArkUserIds])
-      await ctx.db.insert(arkChannelMembers).values(Array.from(memberIds).map(arkUserId => ({
-        arkUserId,
-        channelId: channel.id,
-        status: 'active' as const,
-      }))).onConflictDoNothing()
-    }
-    return channel
+    return withArkResourceTransaction({
+      accountability: arkActionResourceAccountability(ctx, {
+        arkUserId: arkUser?.id,
+        capabilities: access.capabilities,
+        spaceId: input.spaceId,
+      }),
+      authorization: 'domain',
+      database: ctx.db,
+    }, async ({ database, services }) => {
+      const channel = await services.resource('ark.channels').create({
+        categoryId,
+        createdByArkUserId: arkUser?.id,
+        kind: input.kind,
+        name: input.name,
+        slug: input.slug ?? slugify(input.name),
+        spaceId: input.spaceId,
+        targetId: input.targetId,
+        targetType: input.targetType,
+        visibility: input.visibility,
+      }) as typeof arkChannels.$inferSelect
+      if ((channel.visibility === 'private' || channel.kind === 'dm') && arkUser) {
+        const memberIds = new Set([arkUser.id, ...input.memberArkUserIds])
+        await database.insert(arkChannelMembers).values(Array.from(memberIds).map(arkUserId => ({
+          arkUserId,
+          channelId: channel.id,
+          status: 'active' as const,
+        }))).onConflictDoNothing()
+      }
+      return channel
+    })
   }),
-  upsertDm: arkUserProcedure.input(dmUpsertSchema).mutation(async ({ ctx, input }) => {
+  upsertDm: arkUserAction.input(dmUpsertSchema).mutation(async ({ ctx, input }) => {
     const me = await ctx.auth.arkUser()
     if (!me)
-      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
+      throw new ArkActionError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
     const dmSpace = await getDmSpace()
     if (!dmSpace)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'DM space not found' })
+      throw new ArkActionError({ code: 'NOT_FOUND', message: 'DM space not found' })
     await requireVisibleArkUsers(ctx, input.memberArkUserIds)
     const memberIds = Array.from(new Set([me.id, ...input.memberArkUserIds])).sort()
     const identityKey = `dm:${memberIds.join(':')}`
-    const [existing] = await ctx.db.select().from(arkChannels).where(eq(arkChannels.identityKey, identityKey)).limit(1)
+    const [existing] = await ctx.db.select().from(arkChannels).where(and(
+      eq(arkChannels.identityKey, identityKey),
+      isNull(arkChannels.deletedAt),
+    )).limit(1)
     if (existing)
       return existing
-    const [channel] = await ctx.db.insert(arkChannels).values({
-      identityKey,
-      kind: 'dm',
-      name: 'Direct message',
-      slug: `dm-${memberIds.map(id => id.slice(0, 8)).join('-')}`,
-      spaceId: dmSpace.id,
-      visibility: 'private',
-    }).returning()
-    if (!channel)
-      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'DM channel could not be created' })
-    await ctx.db.insert(arkChannelMembers).values(memberIds.map(arkUserId => ({
-      arkUserId,
-      channelId: channel.id,
-      status: 'active' as const,
-    }))).onConflictDoNothing()
-    return channel
+    const access = await ctx.auth.capabilitiesFor(dmSpace.id)
+    try {
+      return await withArkResourceTransaction({
+        accountability: arkActionResourceAccountability(ctx, {
+          arkUserId: me.id,
+          capabilities: access.capabilities,
+          spaceId: dmSpace.id,
+        }),
+        authorization: 'domain',
+        database: ctx.db,
+      }, async ({ database, services }) => {
+        const channel = await services.resource('ark.channels').create({
+          identityKey,
+          kind: 'dm',
+          name: 'Direct message',
+          slug: `dm-${memberIds.map(id => id.slice(0, 8)).join('-')}`,
+          spaceId: dmSpace.id,
+          visibility: 'private',
+        }) as typeof arkChannels.$inferSelect
+        await database.insert(arkChannelMembers).values(memberIds.map(arkUserId => ({
+          arkUserId,
+          channelId: channel.id,
+          status: 'active' as const,
+        }))).onConflictDoNothing()
+        return channel
+      })
+    }
+    catch (error) {
+      const [raceWinner] = await ctx.db.select().from(arkChannels).where(and(
+        eq(arkChannels.identityKey, identityKey),
+        isNull(arkChannels.deletedAt),
+      )).limit(1)
+      if (raceWinner)
+        return raceWinner
+      throw error
+    }
   }),
-  upsertThreadForMessage: arkUserProcedure.input(z.object({ messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
+  upsertThreadForMessage: arkUserAction.input(z.object({ messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
     const [message] = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.id, input.messageId),
       isNull(arkMessages.deletedAt),
     )).limit(1)
     if (!message)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' })
+      throw new ArkActionError({ code: 'NOT_FOUND', message: 'Message not found' })
 
     const { access, channel: parentChannel } = await getChannelForAccess(message.channelId, ctx, 'messages.create')
     if (!access.arkUser)
-      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
+      throw new ArkActionError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
 
     const identityKey = `thread:${message.id}`
     const [existing] = await ctx.db.select().from(arkChannels).where(and(
@@ -240,32 +273,44 @@ export const channelsRouter = createTRPCRouter({
     if (existing)
       return existing
 
-    const [thread] = await ctx.db.insert(arkChannels).values({
-      createdByArkUserId: access.arkUser.id,
-      identityKey,
-      kind: 'thread',
-      name: `Thread: ${messagePreview(message)}`.slice(0, 160),
-      slug: `thread-${message.id.slice(0, 8)}`,
-      spaceId: message.spaceId,
-      targetId: message.id,
-      targetType: 'message_thread',
-      threadParentChannelId: parentChannel.id,
-      threadRootMessageId: message.id,
-      topic: messagePreview(message),
-      visibility: parentChannel.visibility,
-    }).onConflictDoNothing().returning()
-    if (thread)
-      return thread
-
-    const [raceWinner] = await ctx.db.select().from(arkChannels).where(eq(arkChannels.identityKey, identityKey)).limit(1)
-    if (!raceWinner)
-      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Thread channel could not be created' })
-    return raceWinner
+    try {
+      return await withArkResourceTransaction({
+        accountability: arkActionResourceAccountability(ctx, {
+          arkUserId: access.arkUser.id,
+          capabilities: access.capabilities,
+          spaceId: message.spaceId,
+        }),
+        authorization: 'domain',
+        database: ctx.db,
+      }, ({ services }) => services.resource('ark.channels').create({
+        createdByArkUserId: access.arkUser!.id,
+        identityKey,
+        kind: 'thread',
+        name: `Thread: ${messagePreview(message)}`.slice(0, 160),
+        slug: `thread-${message.id.slice(0, 8)}`,
+        spaceId: message.spaceId,
+        targetId: message.id,
+        targetType: 'message_thread',
+        threadParentChannelId: parentChannel.id,
+        threadRootMessageId: message.id,
+        topic: messagePreview(message),
+        visibility: parentChannel.visibility,
+      }))
+    }
+    catch (error) {
+      const [raceWinner] = await ctx.db.select().from(arkChannels).where(and(
+        eq(arkChannels.identityKey, identityKey),
+        isNull(arkChannels.deletedAt),
+      )).limit(1)
+      if (raceWinner)
+        return raceWinner
+      throw error
+    }
   }),
 })
 
-export const messagesRouter = createTRPCRouter({
-  latest: baseProcedure.input(messagesLatestSchema).query(async ({ ctx, input }) => {
+export const messagesRouter = createArkActionRouter({
+  latest: baseAction.input(messagesLatestSchema).query(async ({ ctx, input }) => {
     const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     const rows = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.channelId, input.channelId),
@@ -274,11 +319,11 @@ export const messagesRouter = createTRPCRouter({
     const items = rows.slice(0, input.limit).reverse()
     return messageWindow(ctx.db, items, {
       arkUserId: access.arkUser?.id,
-      hasNewer: false,
-      hasOlder: rows.length > input.limit,
+      next: false,
+      previous: rows.length > input.limit,
     })
   }),
-  before: baseProcedure.input(messagesBeforeSchema).query(async ({ ctx, input }) => {
+  before: baseAction.input(messagesBeforeSchema).query(async ({ ctx, input }) => {
     const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     const cursorDate = parseCursorDate(input.cursor)
     const rows = await ctx.db.select().from(arkMessages).where(and(
@@ -289,11 +334,11 @@ export const messagesRouter = createTRPCRouter({
     const items = rows.slice(0, input.limit).reverse()
     return messageWindow(ctx.db, items, {
       arkUserId: access.arkUser?.id,
-      hasNewer: true,
-      hasOlder: rows.length > input.limit,
+      next: items.length > 0,
+      previous: rows.length > input.limit,
     })
   }),
-  after: baseProcedure.input(messagesAfterSchema).query(async ({ ctx, input }) => {
+  after: baseAction.input(messagesAfterSchema).query(async ({ ctx, input }) => {
     const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     const cursorDate = parseCursorDate(input.cursor)
     const rows = await ctx.db.select().from(arkMessages).where(and(
@@ -304,11 +349,11 @@ export const messagesRouter = createTRPCRouter({
     const items = rows.slice(0, input.limit)
     return messageWindow(ctx.db, items, {
       arkUserId: access.arkUser?.id,
-      hasNewer: rows.length > input.limit,
-      hasOlder: true,
+      next: rows.length > input.limit,
+      previous: items.length > 0,
     })
   }),
-  around: baseProcedure.input(messagesAroundSchema).query(async ({ ctx, input }) => {
+  around: baseAction.input(messagesAroundSchema).query(async ({ ctx, input }) => {
     const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     const [target] = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.id, input.messageId),
@@ -316,7 +361,7 @@ export const messagesRouter = createTRPCRouter({
       isNull(arkMessages.deletedAt),
     )).limit(1)
     if (!target)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' })
+      throw new ArkActionError({ code: 'NOT_FOUND', message: 'Message not found' })
 
     const olderRows = input.before > 0
       ? await ctx.db.select().from(arkMessages).where(and(
@@ -341,11 +386,11 @@ export const messagesRouter = createTRPCRouter({
     return messageWindow(ctx.db, items, {
       anchorMessageId: target.id,
       arkUserId: access.arkUser?.id,
-      hasNewer: newerRows.length > input.after,
-      hasOlder: olderRows.length > input.before,
+      next: newerRows.length > input.after,
+      previous: olderRows.length > input.before,
     })
   }),
-  pinned: baseProcedure.input(messagesPinnedSchema).query(async ({ ctx, input }) => {
+  pinned: baseAction.input(messagesPinnedSchema).query(async ({ ctx, input }) => {
     const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     const cursorDate = input.cursor ? parseCursorDate(input.cursor) : null
     const rows = await ctx.db.select({ message: arkMessages, pin: arkMessagePins }).from(arkMessagePins).innerJoin(
@@ -374,96 +419,116 @@ export const messagesRouter = createTRPCRouter({
         : null,
     }
   }),
-  list: baseProcedure.input(messagesListSchema).query(async ({ ctx, input }) => {
+  list: baseAction.input(messagesListSchema).query(async ({ ctx, input }) => {
     const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
-    const rows = await ctx.db.select().from(arkMessages).where(eq(arkMessages.channelId, input.channelId)).orderBy(desc(arkMessages.createdAt)).limit(input.limit)
+    const rows = await ctx.db.select().from(arkMessages).where(and(
+      eq(arkMessages.channelId, input.channelId),
+      isNull(arkMessages.deletedAt),
+    )).orderBy(desc(arkMessages.createdAt)).limit(input.limit)
     return withMessageDetails(ctx.db, rows, access.arkUser?.id)
   }),
-  create: arkUserProcedure.input(messageCreateSchema).mutation(async ({ ctx, input }) => {
+  create: arkUserAction.input(messageCreateSchema).mutation(async ({ ctx, input }) => {
     const { access, channel } = await getChannelForAccess(input.channelId, ctx, 'messages.create')
     const arkUser = access.arkUser ?? await ctx.auth.arkUser()
-    let rootMessageId: string | null = null
-    let messageRelation: { relationType: 'forum_parent' | 'reply_quote', targetId: string, targetType: 'message' } | null = null
+    const message = await withArkResourceTransaction({
+      accountability: {
+        arkUserId: arkUser?.id ?? null,
+        capabilities: access.capabilities,
+        spaceId: channel.spaceId,
+        system: false,
+        userId: ctx.session?.user?.id ?? null,
+      },
+      authorization: 'domain',
+      database: ctx.db,
+    }, async ({ database, services }) => {
+      let rootMessageId: string | null = null
+      let messageRelation: { relationType: 'forum_parent' | 'reply_quote', targetId: string, targetType: 'message' } | null = null
 
-    if (input.replyToMessageId) {
-      const [target] = await ctx.db.select().from(arkMessages).where(and(
-        eq(arkMessages.id, input.replyToMessageId),
-        isNull(arkMessages.deletedAt),
-      )).limit(1)
-      if (!target || target.channelId !== channel.id) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Reply target must be an existing message in this channel.',
-        })
+      if (input.replyToMessageId) {
+        const [target] = await database.select().from(arkMessages).where(and(
+          eq(arkMessages.id, input.replyToMessageId),
+          isNull(arkMessages.deletedAt),
+        )).limit(1)
+        if (!target || target.channelId !== channel.id) {
+          throw new ArkActionError({
+            code: 'BAD_REQUEST',
+            message: 'Reply target must be an existing message in this channel.',
+          })
+        }
+        messageRelation = {
+          relationType: 'reply_quote',
+          targetId: target.id,
+          targetType: 'message',
+        }
       }
-      messageRelation = {
-        relationType: 'reply_quote',
-        targetId: target.id,
-        targetType: 'message',
-      }
-    }
 
-    if (input.forumParentMessageId) {
-      if (channel.kind !== 'forum') {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Forum parent replies are only available in forum channels.',
-        })
+      if (input.forumParentMessageId) {
+        if (channel.kind !== 'forum') {
+          throw new ArkActionError({
+            code: 'BAD_REQUEST',
+            message: 'Forum parent replies are only available in forum channels.',
+          })
+        }
+        const [target] = await database.select().from(arkMessages).where(and(
+          eq(arkMessages.id, input.forumParentMessageId),
+          isNull(arkMessages.deletedAt),
+        )).limit(1)
+        if (!target || target.channelId !== channel.id) {
+          throw new ArkActionError({
+            code: 'BAD_REQUEST',
+            message: 'Forum parent must be an existing message in this channel.',
+          })
+        }
+        rootMessageId = target.rootMessageId ?? target.id
+        messageRelation = {
+          relationType: 'forum_parent',
+          targetId: target.id,
+          targetType: 'message',
+        }
       }
-      const [target] = await ctx.db.select().from(arkMessages).where(and(
-        eq(arkMessages.id, input.forumParentMessageId),
-        isNull(arkMessages.deletedAt),
-      )).limit(1)
-      if (!target || target.channelId !== channel.id) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Forum parent must be an existing message in this channel.',
-        })
-      }
-      rootMessageId = target.rootMessageId ?? target.id
-      messageRelation = {
-        relationType: 'forum_parent',
-        targetId: target.id,
-        targetType: 'message',
-      }
-    }
 
-    const [message] = await ctx.db.insert(arkMessages).values({
-      authorArkUserId: arkUser?.id,
-      body: input.body,
-      bodyJson: input.bodyJson,
-      channelId: channel.id,
-      rootMessageId,
-      spaceId: channel.spaceId,
-    }).returning()
-    if (message && messageRelation) {
-      await ctx.db.insert(arkMessageRelations).values({
-        messageId: message.id,
-        ...messageRelation,
-      }).onConflictDoNothing()
-    }
-    await ctx.db.update(arkChannels).set({
-      lastMessageAt: new Date(),
-      lastMessagePreview: messagePreview({ body: input.body, bodyJson: input.bodyJson }),
-      messagesCount: sql`${arkChannels.messagesCount} + 1`,
-      updatedAt: new Date(),
-    }).where(eq(arkChannels.id, channel.id))
-    if (message) {
-      publishChatEvent({
+      const created = await services.resource('ark.messages').create({
+        authorArkUserId: arkUser?.id,
+        body: input.body,
+        bodyJson: input.bodyJson,
         channelId: channel.id,
-        reason: 'created',
-        type: 'messages:changed',
+        rootMessageId,
+        spaceId: channel.spaceId,
+      }) as typeof arkMessages.$inferSelect
+      if (created.channelId !== channel.id || created.spaceId !== channel.spaceId)
+        throw new ArkActionError({ code: 'BAD_REQUEST', message: 'Message lifecycle changed its channel boundary.' })
+
+      if (messageRelation) {
+        await database.insert(arkMessageRelations).values({
+          messageId: created.id,
+          ...messageRelation,
+        }).onConflictDoNothing()
+      }
+      await services.resource('ark.channels').update(channel.id, {
+        lastMessageAt: new Date(),
+        lastMessagePreview: messagePreview(created),
+        messagesCount: sql`${arkChannels.messagesCount} + 1`,
+        updatedAt: new Date(),
       })
-    }
+      return created
+    })
+    publishChatEvent({
+      channelId: channel.id,
+      reason: 'created',
+      type: 'messages:changed',
+    })
     return message
   }),
-  react: arkUserProcedure.input(z.object({ emoji: z.string().min(1).max(32), messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
-    const [message] = await ctx.db.select().from(arkMessages).where(eq(arkMessages.id, input.messageId)).limit(1)
+  react: arkUserAction.input(z.object({ emoji: z.string().min(1).max(32), messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
+    const [message] = await ctx.db.select().from(arkMessages).where(and(
+      eq(arkMessages.id, input.messageId),
+      isNull(arkMessages.deletedAt),
+    )).limit(1)
     if (!message)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' })
+      throw new ArkActionError({ code: 'NOT_FOUND', message: 'Message not found' })
     const { access } = await getChannelForAccess(message.channelId, ctx, 'messages.read')
     if (!access.arkUser)
-      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
+      throw new ArkActionError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
     const [existing] = await ctx.db.select().from(arkMessageReactions).where(and(
       eq(arkMessageReactions.messageId, message.id),
       eq(arkMessageReactions.arkUserId, access.arkUser.id),
@@ -493,10 +558,13 @@ export const messagesRouter = createTRPCRouter({
     }
     return { reacted: Boolean(reaction) }
   }),
-  pin: arkUserProcedure.input(z.object({ messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
-    const [message] = await ctx.db.select().from(arkMessages).where(eq(arkMessages.id, input.messageId)).limit(1)
+  pin: arkUserAction.input(z.object({ messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
+    const [message] = await ctx.db.select().from(arkMessages).where(and(
+      eq(arkMessages.id, input.messageId),
+      isNull(arkMessages.deletedAt),
+    )).limit(1)
     if (!message)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' })
+      throw new ArkActionError({ code: 'NOT_FOUND', message: 'Message not found' })
     const { access, channel } = await getChannelForAccess(message.channelId, ctx, 'messages.manage')
     const [pin] = await ctx.db.insert(arkMessagePins).values({
       channelId: channel.id,
@@ -512,15 +580,18 @@ export const messagesRouter = createTRPCRouter({
     }
     return pin ?? null
   }),
-  relate: arkUserProcedure.input(z.object({
+  relate: arkUserAction.input(z.object({
     messageId: z.uuid(),
     relationType: messageRelationKindSchema,
     targetId: z.uuid().optional(),
     targetType: messageRelationTargetTypeSchema,
   })).mutation(async ({ ctx, input }) => {
-    const [message] = await ctx.db.select().from(arkMessages).where(eq(arkMessages.id, input.messageId)).limit(1)
+    const [message] = await ctx.db.select().from(arkMessages).where(and(
+      eq(arkMessages.id, input.messageId),
+      isNull(arkMessages.deletedAt),
+    )).limit(1)
     if (!message)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' })
+      throw new ArkActionError({ code: 'NOT_FOUND', message: 'Message not found' })
     await getChannelForAccess(message.channelId, ctx, 'messages.manage')
     const [relation] = await ctx.db.insert(arkMessageRelations).values(input).returning()
     if (relation) {
@@ -532,10 +603,10 @@ export const messagesRouter = createTRPCRouter({
     }
     return relation
   }),
-  markRead: arkUserProcedure.input(z.object({ channelId: z.uuid(), messageId: z.uuid().optional() })).mutation(async ({ ctx, input }) => {
+  markRead: arkUserAction.input(z.object({ channelId: z.uuid(), messageId: z.uuid().optional() })).mutation(async ({ ctx, input }) => {
     const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     if (!access.arkUser)
-      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
+      throw new ArkActionError({ code: 'UNAUTHORIZED', message: 'Authentication required' })
     const [state] = await ctx.db.insert(arkUserChannelStates).values({
       arkUserId: access.arkUser.id,
       channelId: input.channelId,
@@ -555,7 +626,7 @@ export const messagesRouter = createTRPCRouter({
     }).returning()
     return state
   }),
-  state: protectedProcedure.input(z.object({ channelId: z.uuid() })).query(async ({ ctx, input }) => {
+  state: protectedAction.input(z.object({ channelId: z.uuid() })).query(async ({ ctx, input }) => {
     const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
     if (!access.arkUser)
       return null

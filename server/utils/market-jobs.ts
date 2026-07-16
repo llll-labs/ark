@@ -1,9 +1,12 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import {
   marketJobCategories,
   arkMarketJobs,
   marketJobTags,
 } from '../../db/schema'
+import type { ArkResourceAccountability } from '../resources/types'
+import { registerCoreArkResources } from '../resources/core'
+import { systemArkResourceAccountability, withArkResourceTransaction } from '../resources/service'
 import { useDatabase } from './db'
 
 type Database = ReturnType<typeof useDatabase>
@@ -29,7 +32,7 @@ export interface MarketJobTargets {
  * Single source of truth for the curationStatus→publishedAt invariant:
  * approving stamps the publish time (keeping an earlier one), hiding/parsing
  * clears it. Every write path that changes curationStatus (this upsert
- * service, the tRPC upsert/curate mutations) must derive publishedAt here.
+ * service and the REST upsert/curate Actions) must derive publishedAt here.
  * Returns undefined when curationStatus is not being changed — leave
  * publishedAt untouched in that case.
  */
@@ -68,8 +71,14 @@ async function replaceJobTargets(db: Database, jobId: string, targets: MarketJob
 export async function upsertMarketJob(
   values: MarketJobWriteValues,
   targets: MarketJobTargets = {},
+  options: { accountability?: ArkResourceAccountability } = {},
 ): Promise<{ id: string }> {
+  registerCoreArkResources()
   const db = useDatabase()
+  const accountability = options.accountability ?? {
+    ...systemArkResourceAccountability(),
+    spaceId: values.spaceId,
+  }
   const now = new Date()
   const existing = values.source && values.externalId
     ? (await db.select({
@@ -78,6 +87,7 @@ export async function upsertMarketJob(
       }).from(arkMarketJobs).where(and(
         eq(arkMarketJobs.source, values.source),
         eq(arkMarketJobs.externalId, values.externalId),
+        isNull(arkMarketJobs.deletedAt),
       )).limit(1))[0]
     : null
 
@@ -89,13 +99,15 @@ export async function upsertMarketJob(
     const publishedAt = publishedAtForCuration(values.curationStatus, existing.publishedAt, values.publishedAt ?? now)
     if (publishedAt !== undefined)
       nextValues.publishedAt = publishedAt
-    const [updated] = await db.update(arkMarketJobs).set({
-      ...nextValues,
-    }).where(eq(arkMarketJobs.id, existing.id)).returning()
-    if (!updated)
-      throw new Error('Market job update did not return a row.')
-    await replaceJobTargets(db, updated.id, targets)
-    return { id: updated.id }
+    return withArkResourceTransaction({
+      accountability,
+      authorization: 'domain',
+      database: db,
+    }, async ({ database, services }) => {
+      const updated = await services.resource('ark.market_jobs').update(existing.id, nextValues)
+      await replaceJobTargets(database, updated.id as string, targets)
+      return { id: updated.id as string }
+    })
   }
 
   const insertValues: typeof values & { publishedAt?: Date | null } = {
@@ -104,9 +116,13 @@ export async function upsertMarketJob(
   const publishedAt = publishedAtForCuration(values.curationStatus, null, values.publishedAt ?? now)
   if (publishedAt !== undefined)
     insertValues.publishedAt = publishedAt
-  const [created] = await db.insert(arkMarketJobs).values(insertValues).returning()
-  if (!created)
-    throw new Error('Market job insert did not return a row.')
-  await replaceJobTargets(db, created.id, targets)
-  return { id: created.id }
+  return withArkResourceTransaction({
+    accountability,
+    authorization: 'domain',
+    database: db,
+  }, async ({ database, services }) => {
+    const created = await services.resource('ark.market_jobs').create(insertValues)
+    await replaceJobTargets(database, created.id as string, targets)
+    return { id: created.id as string }
+  })
 }

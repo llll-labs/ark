@@ -508,6 +508,23 @@ export const arkPages = arkTable('pages', {
   index('ark_pages_parent_position_idx').on(table.parentPageId, table.position),
 ])
 
+export const arkResourceDefinitions = arkTable('resource_definitions', {
+  id: uuidPk(),
+  name: text('name').notNull(),
+  schemaName: text('schema_name').notNull().default('public'),
+  tableName: text('table_name').notNull(),
+  label: text('label'),
+  primaryKey: text('primary_key').notNull().default('id'),
+  deletionPolicy: text('deletion_policy').notNull().default('disabled'),
+  operationsJson: jsonb('operations_json').$type<Record<string, boolean>>().notNull().default(sql`'{}'::jsonb`),
+  fieldsJson: jsonb('fields_json').$type<Record<string, string[]>>().notNull().default(sql`'{}'::jsonb`),
+  rowPolicyJson: jsonb('row_policy_json').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  ...timestampsNoSoftDelete(),
+}, table => [
+  uniqueIndex('ark_resource_definitions_name_unique').on(table.name),
+  uniqueIndex('ark_resource_definitions_table_unique').on(table.schemaName, table.tableName),
+])
+
 export const arkCollections = arkTable('collections', {
   id: uuidPk(),
   spaceId: uuid('space_id').notNull().references(() => arkSpaces.id, { onDelete: 'cascade' }),

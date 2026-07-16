@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import {
   buildSignedFileUrl,
+  deleteStoredObject,
   parseStorageConfig,
   putStoredObject,
   readStoredObject,
@@ -119,6 +120,15 @@ test('local storage writes and reads from the configured root', async () => {
     }))
 
     assert.equal(body.toString('utf8'), 'hello')
+
+    await deleteStoredObject(location, 'aa/file.txt')
+    await assert.rejects(
+      async () => streamToBuffer(await readStoredObject({
+        bucket: location.bucket,
+        path: 'aa/file.txt',
+        storage: location.name,
+      })),
+    )
   }
   finally {
     for (const [key, value] of Object.entries(previousEnv)) {

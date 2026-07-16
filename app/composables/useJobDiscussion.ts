@@ -19,7 +19,7 @@ export interface UseJobDiscussionOptions {
 }
 
 export function useJobDiscussion(options: UseJobDiscussionOptions) {
-  const { $trpc } = useNuxtApp()
+  const { $arkApi } = useNuxtApp()
   const { error, pending: discussionSaving, run } = useAsyncAction()
   const firstDiscussionMessage = ref('')
 
@@ -30,7 +30,7 @@ export function useJobDiscussion(options: UseJobDiscussionOptions) {
       throw new Error('Job is not loaded')
     if (job.discussionChannelId)
       return { id: job.discussionChannelId }
-    const result = await $trpc.ark.market.jobs.startDiscussion.mutate({ id: job.id })
+    const result = await $arkApi.mutate("market.jobs.startDiscussion", { id: job.id })
     if (!result.channel)
       throw new Error('Channel was not created')
     await options.onDiscussionStarted?.(result as { channel: { id: string }, job?: any })
@@ -46,7 +46,7 @@ export function useJobDiscussion(options: UseJobDiscussionOptions) {
       return
     await run(async () => {
       const channel = await ensureJobDiscussion()
-      await $trpc.ark.messages.create.mutate({
+      await $arkApi.mutate("messages.create", {
         body,
         bodyJson: { jobId: job.id },
         channelId: channel.id,

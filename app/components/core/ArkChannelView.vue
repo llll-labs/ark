@@ -78,7 +78,7 @@ const THREAD_PANEL_SSR_FALLBACK_WIDTH = 560
 const THREAD_PANEL_WIDTH_STORAGE_KEY = 'ark:thread-panel-width'
 
 const { t } = useI18n()
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const queryClient = useQueryClient()
 const draft = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -597,7 +597,7 @@ async function sendMessage() {
       if (!message)
         throw new Error(t('channel.messageNotCreated'))
       for (const file of files) {
-        await $trpc.ark.messages.relate.mutate({
+        await $arkApi.mutate("messages.relate", {
           messageId: message.id,
           relationType: 'attachment',
           targetId: file.id,
@@ -622,14 +622,14 @@ async function sendMessage() {
 
 async function react(messageId: string, emoji: string) {
   await runAction(async () => {
-    await $trpc.ark.messages.react.mutate({ emoji, messageId })
+    await $arkApi.mutate("messages.react", { emoji, messageId })
     void invalidateArkChannelMessages(queryClient, props.channelId)
   }, { errorFallback: t('channel.reactionFailed') })
 }
 
 async function pin(messageId: string) {
   await runAction(async () => {
-    await $trpc.ark.messages.pin.mutate({ messageId })
+    await $arkApi.mutate("messages.pin", { messageId })
     void queryClient.invalidateQueries({ queryKey: arkChannelQueryKeys.pinnedMessages(props.channelId) })
   }, { errorFallback: t('channel.pinFailed') })
 }

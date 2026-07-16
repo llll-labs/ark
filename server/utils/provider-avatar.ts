@@ -2,6 +2,7 @@ import type { AvatarSyncMetadata } from './provider-avatar-rules'
 import { Buffer } from 'node:buffer'
 import { and, desc, eq, inArray } from 'drizzle-orm'
 import { arkUsers, arkAuthAccounts } from '../../db/schema'
+import { withArkResourceTransaction } from '../resources/service'
 import { useDatabase } from './db'
 import { storeFileFromBuffer } from './files'
 import {
@@ -160,33 +161,55 @@ export async function syncArkUserProviderAvatar(arkUser: ArkUserRow, authUser: A
 
   const avatar = await fetchProviderAvatar(sourceUrl)
   const extension = extensionForMimeType(avatar.mimeType)
-  const file = await storeFileFromBuffer({
-    data: avatar.data,
-    filename: `${provider.providerId}-${provider.accountId}.${extension}`,
-    metadataJson: {
-      provider: provider.providerId,
-      providerUserId: provider.accountId,
-      sourceUrlHash,
-    },
-    mimeType: avatar.mimeType,
-    originalFilename: `${provider.providerId}-${provider.accountId}.${extension}`,
-    ownerArkUserId: arkUser.id,
-    visibility: 'public',
-  })
-  const [updated] = await useDatabase().update(arkUsers).set({
-    avatarFileId: file.id,
-    profileJson: {
-      ...profileJson,
-      avatarSync: {
-        fileId: file.id,
-        provider: provider.providerId,
-        providerUserId: provider.accountId,
-        sourceUrlHash,
-        syncedAt: new Date().toISOString(),
-      },
-    },
-    updatedAt: new Date(),
-  }).where(eq(arkUsers.id, arkUser.id)).returning()
-
-  return updated ?? { ...arkUser, avatarFileId: file.id }
+  const accountability = {
+    arkUserId: arkUser.id,
+    capabilities: [],
+    spaceId: null,
+    system: false,
+    userId: authUser.id,
+  }
+  let rollbackCleanup: (() => Promise<void>) | undefined
+  try {
+    return await withArkResourceTransaction({
+      accountability,
+      authorization: 'domain',
+      database: useDatabase(),
+    }, async ({ database, services }) => {
+      const file = await storeFileFromBuffer({
+        accountability,
+        data: avatar.data,
+        filename: `${provider.providerId}-${provider.accountId}.${extension}`,
+        metadataJson: {
+          provider: provider.providerId,
+          providerUserId: provider.accountId,
+          sourceUrlHash,
+        },
+        mimeType: avatar.mimeType,
+        onRollbackCleanup(cleanup) {
+          rollbackCleanup = cleanup
+        },
+        originalFilename: `${provider.providerId}-${provider.accountId}.${extension}`,
+        ownerArkUserId: arkUser.id,
+        visibility: 'public',
+      }, { database, services })
+      return services.resource('ark.users').update(arkUser.id, {
+        avatarFileId: file.id,
+        profileJson: {
+          ...profileJson,
+          avatarSync: {
+            fileId: file.id,
+            provider: provider.providerId,
+            providerUserId: provider.accountId,
+            sourceUrlHash,
+            syncedAt: new Date().toISOString(),
+          },
+        },
+        updatedAt: new Date(),
+      }) as Promise<typeof arkUsers.$inferSelect>
+    })
+  }
+  catch (error) {
+    await rollbackCleanup?.()
+    throw error
+  }
 }

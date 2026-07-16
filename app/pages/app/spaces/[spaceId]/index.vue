@@ -4,15 +4,15 @@ definePageMeta({
 })
 
 const route = useRoute()
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const spaceId = computed(() => String(route.params.spaceId))
 
 const { data } = await useAsyncData(`ark-space-${spaceId.value}`, async () => {
   const [space, channels, pages, capabilities] = await Promise.all([
-    $trpc.ark.spaces.byId.query({ id: spaceId.value }),
-    $trpc.ark.channels.list.query({ spaceId: spaceId.value }).catch(() => []),
-    $trpc.ark.pages.list.query({ spaceId: spaceId.value }).catch(() => []),
-    $trpc.ark.spaces.effectiveCapabilities.query({ spaceId: spaceId.value }),
+    $arkApi.query("spaces.byId", { id: spaceId.value }),
+    $arkApi.query("channels.list", { spaceId: spaceId.value }).catch(() => []),
+    $arkApi.query("pages.list", { spaceId: spaceId.value }).catch(() => []),
+    $arkApi.query("spaces.effectiveCapabilities", { spaceId: spaceId.value }),
   ])
   return { capabilities, channels, pages, space }
 })

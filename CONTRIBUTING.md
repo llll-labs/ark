@@ -34,7 +34,7 @@ Generic Ark runtime:
   (`server/utils/notifications.ts`). Core owns delivery because it owns the auth
   identities; callers pass a recipient, an event `kind`, and a **pre-localized**
   message.
-- `useArk*` composables, core UI (`Ark*`), the tRPC core router
+- `useArk*` composables, core UI (`Ark*`), Resource REST, and domain REST Actions
 
 If something assumes a specific language, sources, or product flow, it is **not**
 core — it belongs in the consuming app. The governing question for every change:

@@ -5,7 +5,7 @@ definePageMeta({
 
 await useArkCapabilityGate('forum.access')
 
-const { $trpc } = useNuxtApp()
+const { $arkApi } = useNuxtApp()
 const { t } = useI18n()
 const createOpen = ref(false)
 const { pending: saving, error: errorMessage, run } = useAsyncAction()
@@ -16,20 +16,33 @@ const topicForm = reactive({
   title: '',
 })
 
+interface ForumSpace { id: string, parentSpaceId: null | string }
+interface ForumCategory { id: string, name: string }
+interface ForumChannel {
+  categoryId?: null | string
+  id: string
+  kind: string
+  lastMessagePreview?: null | string
+  messagesCount: number
+  name: string
+  topic?: null | string
+  visibility: string
+}
+
 useArkEscapeDismiss(createOpen)
 
 const { data, refresh } = await useAsyncData('ark-forum', async () => {
-  const spaces = await $trpc.ark.spaces.list.query({})
+  const spaces = await $arkApi.query("spaces.list", {}) as ForumSpace[]
   const root = spaces.find(space => !space.parentSpaceId) ?? spaces[0]
   const [channels, categories] = root
     ? await Promise.all([
-        $trpc.ark.channels.list.query({ spaceId: root.id }),
-        $trpc.ark.channelCategories.list.query({ spaceId: root.id }),
+        $arkApi.query("channels.list", { spaceId: root.id }),
+        $arkApi.query("channelCategories.list", { spaceId: root.id }),
       ])
     : [[], []]
   return {
-    categories,
-    channels: channels.filter(channel => channel.kind === 'forum'),
+    categories: categories as ForumCategory[],
+    channels: (channels as ForumChannel[]).filter(channel => channel.kind === 'forum'),
     root,
   }
 })
@@ -59,7 +72,7 @@ async function createTopic() {
   if (!data.value?.root || !topicForm.title.trim())
     return
   const channel = await run(async () => {
-    const created = await $trpc.ark.channels.create.mutate({
+    const created = await $arkApi.mutate("channels.create", {
       kind: 'forum',
       memberArkUserIds: [],
       name: topicForm.title.trim(),
@@ -70,7 +83,7 @@ async function createTopic() {
       visibility: 'public',
     })
     if (topicForm.body.trim()) {
-      await $trpc.ark.messages.create.mutate({
+      await $arkApi.mutate("messages.create", {
         body: topicForm.body.trim(),
         bodyJson: { topicTitle: topicForm.title },
         channelId: created.id,
