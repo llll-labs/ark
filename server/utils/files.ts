@@ -1,10 +1,21 @@
-import type { Buffer } from 'node:buffer'
+import type { Readable } from 'node:stream'
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { arkFiles, arkFileVariants } from '../../db/schema'
+import { and, eq, isNull } from 'drizzle-orm'
 import { createBoundRequestAuth } from './authorization'
 import { useDatabase } from './db'
 import { fileVariantObjectPath, originalFileObjectPath } from './file-paths'
-import { defaultPrivateStorage, defaultPublicStorage, putStoredObject } from './storage'
+import {
+  buildSignedFileUrl,
+  defaultPrivateStorage,
+  defaultPublicStorage,
+  deleteStoredObject,
+  putStoredObject,
+  readStoredObject,
+  resolveStorageLocation,
+  signedReadUrl,
+} from './storage'
 import { uuidv7 } from './uuid'
 
 interface StoredVariant {
@@ -19,6 +30,7 @@ interface StoredVariant {
 }
 
 export interface StoreFileFromBufferInput {
+  accessMode?: 'public' | 'signed_only' | 'space'
   data: Buffer
   filename?: string
   metadataJson?: Record<string, unknown>
@@ -45,6 +57,11 @@ export async function storeFileFromBuffer(input: StoreFileFromBufferInput) {
   const filename = input.filename ?? originalFileObjectPath(id, undefined, mimeType)
   const basePath = originalFileObjectPath(id, input.originalFilename ?? input.filename, mimeType)
   const visibility = input.visibility ?? 'private'
+  const accessMode = input.accessMode ?? (visibility === 'public' ? 'public' : 'space')
+  if (visibility === 'public' && accessMode !== 'public')
+    throw new Error('Public Ark files must use public access mode.')
+  if (visibility !== 'public' && accessMode === 'public')
+    throw new Error('Private Ark files cannot use public access mode.')
   const originalStorage = visibility === 'public' ? defaultPublicStorage() : defaultPrivateStorage()
   const variantStorage = originalStorage
   await putStoredObject(originalStorage, basePath, input.data, mimeType)
@@ -87,6 +104,7 @@ export async function storeFileFromBuffer(input: StoreFileFromBufferInput) {
   }
 
   const [file] = await db.insert(arkFiles).values({
+    accessMode,
     bucket: originalStorage.bucket,
     checksum,
     filename,
@@ -120,6 +138,137 @@ export async function storeFileFromBuffer(input: StoreFileFromBufferInput) {
   }
 
   return file
+}
+
+function safeDispositionFilename(value: string) {
+  return value.replace(/[\r\n"]/g, '_')
+}
+
+/**
+ * Creates a short-lived delivery URL after trusted tenant/domain code has
+ * completed its own entitlement checks. This function intentionally performs
+ * no authorization and must never be called directly from an untrusted route.
+ */
+export async function createTrustedArkFileDeliveryUrl(input: {
+  disposition?: 'attachment' | 'inline'
+  expiresInSeconds?: number
+  fileId: string
+}) {
+  const db = useDatabase()
+  const [file] = await db.select().from(arkFiles).where(and(
+    eq(arkFiles.id, input.fileId),
+    isNull(arkFiles.deletedAt),
+  )).limit(1)
+  if (!file)
+    throw new Error('Ark file not found.')
+
+  const dispositionKind = input.disposition ?? 'attachment'
+  const filename = safeDispositionFilename(file.originalFilename || file.filename)
+  const disposition = `${dispositionKind}; filename="${filename}"`
+  const location = resolveStorageLocation(file.storage)
+  if (location.driver === 's3') {
+    return signedReadUrl({
+      bucket: file.bucket,
+      path: file.path,
+      storage: file.storage,
+    }, {
+      disposition,
+      expiresInSeconds: input.expiresInSeconds,
+    })
+  }
+
+  const expiresInSeconds = input.expiresInSeconds ?? location.signedUrlExpiresSeconds
+  return buildSignedFileUrl({
+    disposition: dispositionKind,
+    expires: Math.floor(Date.now() / 1000) + expiresInSeconds,
+    id: file.id,
+  })
+}
+
+/**
+ * Permanently removes an Ark object after trusted domain code has established
+ * that no entitlement may still deliver it. This performs no authorization.
+ */
+export async function deleteTrustedArkFileObject(input: {
+  allowPublic?: boolean
+  expectedStorage?: string
+  fileId: string
+  now?: Date
+}) {
+  const db = useDatabase()
+  const [file] = await db.select().from(arkFiles).where(and(
+    eq(arkFiles.id, input.fileId),
+    isNull(arkFiles.deletedAt),
+  )).limit(1)
+  if (!file)
+    return null
+  if (input.expectedStorage && file.storage !== input.expectedStorage)
+    throw new Error(`Ark file is stored in ${file.storage}, not ${input.expectedStorage}.`)
+  if (file.accessMode === 'public' && !input.allowPublic)
+    throw new Error('Public Ark files require explicit derivative retirement before object deletion.')
+  const now = input.now ?? new Date()
+  await deleteStoredObject({ bucket: file.bucket, path: file.path, storage: file.storage })
+  const [deleted] = await db.update(arkFiles).set({
+    deletedAt: now,
+    updatedAt: now,
+  }).where(and(eq(arkFiles.id, file.id), isNull(arkFiles.deletedAt))).returning()
+  return deleted ?? file
+}
+
+async function streamToLimitedBuffer(stream: Readable, maximumBytes: number) {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of stream) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    size += buffer.length
+    if (size > maximumBytes)
+      throw new Error(`Image source exceeds the ${maximumBytes} byte derivative limit.`)
+    chunks.push(buffer)
+  }
+  return Buffer.concat(chunks)
+}
+
+/** Creates a sanitized, separately-addressable public WebP and its variants. */
+export async function createArkPublicImageDerivative(input: {
+  metadataJson?: Record<string, unknown>
+  ownerArkUserId?: null | string
+  sourceFileId: string
+}) {
+  const db = useDatabase()
+  const [source] = await db.select().from(arkFiles).where(and(
+    eq(arkFiles.id, input.sourceFileId),
+    isNull(arkFiles.deletedAt),
+  )).limit(1)
+  if (!source)
+    throw new Error('Source Ark file not found.')
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(source.mimeType.toLowerCase()))
+    throw new Error('Public derivatives support JPEG, PNG, and WebP sources only.')
+  const maximumBytes = 25_000_000
+  if (source.sizeBytes < 1 || source.sizeBytes > maximumBytes)
+    throw new Error('Public image derivative source must be no larger than 25 MB.')
+
+  const stream = await readStoredObject({ bucket: source.bucket, path: source.path, storage: source.storage })
+  const data = await streamToLimitedBuffer(stream, maximumBytes)
+  const sharp = (await import('sharp')).default
+  const maximumPixels = 40_000_000
+  const image = sharp(data, { failOn: 'error', limitInputPixels: maximumPixels })
+  const metadata = await image.metadata()
+  if (!metadata.width || !metadata.height || metadata.width * metadata.height > maximumPixels)
+    throw new Error('Public image derivative source exceeds the 40 megapixel limit.')
+  const sanitized = await image.rotate().webp({ quality: 90 }).toBuffer()
+  return storeFileFromBuffer({
+    accessMode: 'public',
+    data: sanitized,
+    metadataJson: {
+      ...input.metadataJson,
+      derivativeKind: 'sanitized_public_image',
+      sourceFileId: source.id,
+    },
+    mimeType: 'image/webp',
+    originalFilename: `${source.id}.webp`,
+    ownerArkUserId: input.ownerArkUserId ?? source.ownerArkUserId,
+    visibility: 'public',
+  })
 }
 
 export async function storeUploadedFile(

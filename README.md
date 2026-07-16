@@ -81,6 +81,47 @@ STORAGE_PRIVATE_SECRET=rustfsadmin
 
 Local private-file signed URLs are app HMAC URLs signed with `BETTER_AUTH_SECRET`.
 
+### Direct S3 uploads and protected delivery
+
+S3-backed tenants can upload without buffering file bytes in Nitro:
+
+```text
+POST   /api/ark/files/uploads
+POST   /api/ark/files/uploads/:uploadId/finalize
+DELETE /api/ark/files/uploads/:uploadId
+```
+
+Creation accepts `spaceId`, `originalFilename`, `mimeType`, `sizeBytes`, an
+optional named `storage`, tenant `metadataJson`, and
+`accessMode: "space" | "signed_only"`. It returns
+a short-lived single-PUT URL and required headers. The storage CORS policy must
+allow `Content-Type` and `If-None-Match`; the browser supplies the signed
+`Content-Length` from the request body. The create-only condition prevents a
+still-valid URL from overwriting its object after finalization. Finalization verifies object
+size, MIME type, ownership, expiry, and ETag before creating the `ark.files`
+row. `FILES_DIRECT_UPLOAD_MAX_BYTES` defaults to 5 GB and
+`FILES_UPLOAD_URL_EXPIRES` defaults to 15 minutes.
+
+`signed_only` files cannot be opened through broad space-level `files.read`;
+trusted tenant domain code must authorize its own entitlement and then call
+`createTrustedArkFileDeliveryUrl()` from `@kurark/ark/server/utils/files`.
+That function performs no authorization itself. S3 files receive direct,
+short-lived object-store URLs; local files receive Ark HMAC URLs.
+
+`createArkPublicImageDerivative()` creates a separate sanitized public WebP
+plus preview/thumb variants from a private JPEG, PNG, or WebP source up to
+25 MB. Upload sessions remain Ark Internal Tables rather than Resources; these
+binary operations are specialized Files domain operations and can later route
+their metadata writes through the `ark.files` Code Resource lifecycle.
+Call `cleanupExpiredArkFileUploads()` from a durable tenant/worker schedule to
+remove abandoned objects after their PUT URLs expire; failed deletions remain
+pending for a later retry.
+
+`deleteTrustedArkFileObject()` is the tenant-trusted cleanup primitive for
+terminal domain records. It performs no authorization, refuses public files
+unless explicitly allowed, optionally pins the expected storage location,
+deletes the object, and then soft-deletes its `ark.files` row.
+
 Run the Drizzle migrations shipped with the package before booting a tenant app that uses Ark. The migrations create the Ark runtime schema, including auth, users, spaces, roles, capabilities, content, channels, files, market stores and jobs, notification outbox, and settings. Tenant apps should run their own migration chain after the core chain for tenant-owned physical tables.
 
 ## Auth And Middleware

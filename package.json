@@ -24,6 +24,8 @@
     "./server/utils/discord-webhook": "./server/utils/discord-webhook.ts",
     "./server/utils/email-otp": "./server/utils/email-otp.ts",
     "./server/utils/forum": "./server/utils/forum.ts",
+    "./server/utils/file-uploads": "./server/utils/file-uploads.ts",
+    "./server/utils/files": "./server/utils/files.ts",
     "./server/utils/market-jobs": "./server/utils/market-jobs.ts",
     "./server/utils/notifications": "./server/utils/notifications.ts",
     "./server/utils/telegram-auth": "./server/utils/telegram-auth.ts",
@@ -64,6 +66,7 @@
     "server/utils/discord-webhook.ts",
     "server/utils/email-otp.ts",
     "server/utils/env.ts",
+    "server/utils/file-uploads.ts",
     "server/utils/file-paths.ts",
     "server/utils/files.ts",
     "server/utils/forum.ts",
@@ -91,7 +94,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "preflight": "node scripts/ark.mjs preflight",
-    "test": "node --test scripts/*.test.mjs",
+    "test": "node --test scripts/*.test.mjs && pnpm run test:files",
+    "test:files": "tsx --test --test-concurrency=1 server/utils/file-uploads.test.ts && tsx --test --test-concurrency=1 server/utils/files.integration.test.ts",
     "typecheck": "nuxi prepare && vue-tsc --noEmit -p tsconfig.nuxt.json && pnpm run typecheck:scripts",
     "typecheck:scripts": "tsc --ignoreConfig --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --types node --skipLibCheck scripts/*.ts"
   },
@@ -133,6 +137,7 @@
     "@iconify-json/lucide": "^1.2.108",
     "@types/node": "24.12.4",
     "@types/nodemailer": "^8.0.1",
+    "tsx": "^4.22.4",
     "typescript": "6.0.3",
     "vue-tsc": "3.3.0"
   }

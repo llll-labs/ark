@@ -1,13 +1,15 @@
 import { Buffer } from 'node:buffer'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
@@ -48,10 +50,16 @@ export interface ArkStorageConfig {
   locations: Record<string, ArkStorageLocation>
 }
 
-interface StoredObjectRef {
+export interface StoredObjectRef {
   bucket: string
   path: string
   storage: string
+}
+
+export interface StoredObjectHead {
+  contentLength: number
+  contentType: null | string
+  etag: null | string
 }
 
 interface SignedFileUrlInput {
@@ -217,6 +225,9 @@ function s3Client(location: ArkStorageLocation) {
     endpoint: location.endpoint,
     forcePathStyle: location.forcePathStyle,
     region: location.region,
+    // A presigned PUT has no Body while it is being signed. Avoid the SDK
+    // generating an empty-body checksum that would reject the later upload.
+    requestChecksumCalculation: 'WHEN_REQUIRED',
   })
   clientCache.set(location.name, client)
   return client
@@ -275,6 +286,62 @@ export async function putStoredObject(location: ArkStorageLocation, path: string
   }))
 }
 
+export async function createDirectUploadUrl(
+  location: ArkStorageLocation,
+  path: string,
+  contentType: string,
+  contentLength: number,
+  expiresInSeconds = 900,
+) {
+  if (location.driver !== 's3')
+    throw new Error(`Direct uploads require S3 storage; location "${location.name}" uses ${location.driver}.`)
+  if (!Number.isInteger(expiresInSeconds) || expiresInSeconds < 1 || expiresInSeconds > 3600)
+    throw new Error('Direct upload URL expiry must be between 1 and 3600 seconds.')
+
+  await ensureBucket(location)
+  return getSignedUrl(
+    s3Client(location),
+    new PutObjectCommand({
+      Bucket: location.bucket,
+      ContentLength: contentLength,
+      ContentType: contentType,
+      // A URL may remain valid briefly after finalization. Conditional creation
+      // makes every retry fail once the first object exists, preventing mutation.
+      IfNoneMatch: '*',
+      Key: path,
+    }),
+    { expiresIn: expiresInSeconds },
+  )
+}
+
+export async function headStoredObject(ref: StoredObjectRef): Promise<StoredObjectHead> {
+  const location = resolveStorageLocation(ref.storage)
+  if (location.driver !== 's3')
+    throw new Error(`Direct upload finalization requires S3 storage; location "${location.name}" uses ${location.driver}.`)
+
+  const result = await s3Client(location).send(new HeadObjectCommand({
+    Bucket: ref.bucket,
+    Key: ref.path,
+  }))
+  return {
+    contentLength: Number(result.ContentLength ?? 0),
+    contentType: result.ContentType ?? null,
+    etag: result.ETag?.replace(/^"|"$/g, '') || null,
+  }
+}
+
+export async function deleteStoredObject(ref: StoredObjectRef) {
+  const location = resolveStorageLocation(ref.storage)
+  if (location.driver === 'local') {
+    await rm(localObjectPath(location, ref.path), { force: true })
+    return
+  }
+  await s3Client(location).send(new DeleteObjectCommand({
+    Bucket: ref.bucket,
+    Key: ref.path,
+  }))
+}
+
 export async function readStoredObject(ref: StoredObjectRef) {
   const location = resolveStorageLocation(ref.storage)
   if (location.driver === 'local')
@@ -298,18 +365,23 @@ export async function readStoredObject(ref: StoredObjectRef) {
   throw new Error(`Object ${ref.bucket}/${ref.path} did not return a readable stream.`)
 }
 
-export async function signedReadUrl(ref: StoredObjectRef) {
+export async function signedReadUrl(ref: StoredObjectRef, options: { disposition?: string, expiresInSeconds?: number } = {}) {
   const location = resolveStorageLocation(ref.storage)
   if (location.driver === 'local')
     throw new Error('Local storage signed URLs must be created with buildSignedFileUrl().')
+
+  const expiresIn = options.expiresInSeconds ?? location.signedUrlExpiresSeconds
+  if (!Number.isInteger(expiresIn) || expiresIn < 1 || expiresIn > 3600)
+    throw new Error('Signed read URL expiry must be between 1 and 3600 seconds.')
 
   return getSignedUrl(
     s3Client(location),
     new GetObjectCommand({
       Bucket: ref.bucket,
       Key: ref.path,
+      ResponseContentDisposition: options.disposition,
     }),
-    { expiresIn: location.signedUrlExpiresSeconds },
+    { expiresIn },
   )
 }
 

@@ -8,6 +8,20 @@
       "when": 1781720165918,
       "tag": "0000_pretty_black_crow",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1784205652645,
+      "tag": "0001_sticky_sheva_callister",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784208516200,
+      "tag": "0002_violet_spiral",
+      "breakpoints": true
     }
   ]
 }

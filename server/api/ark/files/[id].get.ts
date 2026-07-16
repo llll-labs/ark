@@ -40,15 +40,18 @@ export default defineEventHandler(async (event) => {
     if (hasSignedUrlParams)
       throw createError({ statusCode: 403, statusMessage: 'File signed URL is invalid or expired.' })
 
+    if (file.accessMode === 'signed_only')
+      throw createError({ statusCode: 403, statusMessage: 'File access requires a signed URL.' })
+
     const spaceId = typeof file.metadataJson.spaceId === 'string' ? file.metadataJson.spaceId : null
+    if (!spaceId)
+      throw createError({ statusCode: 403, statusMessage: 'File access denied.' })
     const { auth, session } = await createBoundRequestAuth(event)
     if (!session?.user)
       throw createError({ statusCode: 403, statusMessage: 'File access denied.' })
-    if (spaceId) {
-      const access = await auth.capabilitiesFor(spaceId)
-      if (!access.capabilities.includes('files.read'))
-        throw createError({ statusCode: 403, statusMessage: 'File access denied.' })
-    }
+    const access = await auth.capabilitiesFor(spaceId)
+    if (!access.capabilities.includes('files.read'))
+      throw createError({ statusCode: 403, statusMessage: 'File access denied.' })
   }
 
   const [variant] = variantKind
