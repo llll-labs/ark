@@ -1,0 +1,3 @@
+# Pagination is Resource-specific
+
+Generic Resource lists use `limit` and `offset`, but Domain Operations may define pagination required by their behavior. Chat message windows retain bidirectional keyset pagination over `(createdAt, id)`, including latest, previous, next, and around-message loading. REST responses expose nullable opaque `prevCursor` and `nextCursor`; cursor presence alone indicates whether another page exists, so no separate availability flags are returned. Messages remain chronologically ordered regardless of fetch direction. Migrating chat from tRPC to REST must preserve window semantics, bidirectional infinite scrolling, jump-to-message behavior, and deduplication; only the transport contract may change.
