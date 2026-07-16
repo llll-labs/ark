@@ -1,5 +1,5 @@
 {
-  "id": "43c6b730-c6ab-4b23-ae46-b94440247d72",
+  "id": "e1af91ca-6398-4927-b366-0eefbc99ebf6",
   "prevId": "334d55f3-74ff-47a8-b211-c1c8977eca05",
   "version": "7",
   "dialect": "postgresql",
@@ -1330,6 +1330,271 @@
       },
       "isRLSEnabled": false
     },
+    "ark.file_uploads": {
+      "name": "file_uploads",
+      "schema": "ark",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "uuidv7()"
+        },
+        "file_id": {
+          "name": "file_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_ark_user_id": {
+          "name": "owner_ark_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "space_id": {
+          "name": "space_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "storage": {
+          "name": "storage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bucket": {
+          "name": "bucket",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "path": {
+          "name": "path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "original_filename": {
+          "name": "original_filename",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mime_type": {
+          "name": "mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "size_bytes": {
+          "name": "size_bytes",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "access_mode": {
+          "name": "access_mode",
+          "type": "file_access_mode",
+          "typeSchema": "ark",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "file_upload_status",
+          "typeSchema": "ark",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "etag": {
+          "name": "etag",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "finalized_at": {
+          "name": "finalized_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "aborted_at": {
+          "name": "aborted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "object_deleted_at": {
+          "name": "object_deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "metadata_json": {
+          "name": "metadata_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "ark_file_uploads_file_unique": {
+          "name": "ark_file_uploads_file_unique",
+          "columns": [
+            {
+              "expression": "file_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ark_file_uploads_object_unique": {
+          "name": "ark_file_uploads_object_unique",
+          "columns": [
+            {
+              "expression": "storage",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "bucket",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "path",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ark_file_uploads_owner_status_idx": {
+          "name": "ark_file_uploads_owner_status_idx",
+          "columns": [
+            {
+              "expression": "owner_ark_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ark_file_uploads_expiry_idx": {
+          "name": "ark_file_uploads_expiry_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "file_uploads_owner_ark_user_id_users_id_fk": {
+          "name": "file_uploads_owner_ark_user_id_users_id_fk",
+          "tableFrom": "file_uploads",
+          "tableTo": "users",
+          "schemaTo": "ark",
+          "columnsFrom": [
+            "owner_ark_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "file_uploads_space_id_spaces_id_fk": {
+          "name": "file_uploads_space_id_spaces_id_fk",
+          "tableFrom": "file_uploads",
+          "tableTo": "spaces",
+          "schemaTo": "ark",
+          "columnsFrom": [
+            "space_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ark_file_uploads_size_check": {
+          "name": "ark_file_uploads_size_check",
+          "value": "\"ark\".\"file_uploads\".\"size_bytes\" > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "ark.file_variants": {
       "name": "file_variants",
       "schema": "ark",
@@ -1381,7 +1646,7 @@
         },
         "size_bytes": {
           "name": "size_bytes",
-          "type": "integer",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true,
           "default": 0
@@ -1543,7 +1808,7 @@
         },
         "size_bytes": {
           "name": "size_bytes",
-          "type": "integer",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true,
           "default": 0
@@ -1573,6 +1838,14 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'private'"
+        },
+        "access_mode": {
+          "name": "access_mode",
+          "type": "file_access_mode",
+          "typeSchema": "ark",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'space'"
         },
         "metadata_json": {
           "name": "metadata_json",
@@ -1653,7 +1926,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "ark_files_visibility_access_check": {
+          "name": "ark_files_visibility_access_check",
+          "value": "(\n    (\"ark\".\"files\".\"visibility\" = 'public' AND \"ark\".\"files\".\"access_mode\" = 'public') OR\n    (\"ark\".\"files\".\"visibility\" <> 'public' AND \"ark\".\"files\".\"access_mode\" <> 'public')\n  )"
+        }
+      },
       "isRLSEnabled": false
     },
     "ark.grants": {
@@ -13216,6 +13494,25 @@
         "url",
         "user",
         "verification"
+      ]
+    },
+    "ark.file_access_mode": {
+      "name": "file_access_mode",
+      "schema": "ark",
+      "values": [
+        "public",
+        "space",
+        "signed_only"
+      ]
+    },
+    "ark.file_upload_status": {
+      "name": "file_upload_status",
+      "schema": "ark",
+      "values": [
+        "pending",
+        "finalized",
+        "aborted",
+        "expired"
       ]
     },
     "ark.grant_effect": {

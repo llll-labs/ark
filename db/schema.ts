@@ -1,6 +1,7 @@
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
 import {
+  bigint,
   boolean,
   check,
   index,
@@ -86,6 +87,8 @@ export const marketJobStatusEnum = arkSchema.enum('market_job_status', ['draft',
 export const marketJobCurationStatusEnum = arkSchema.enum('market_job_curation_status', ['parsed', 'approved', 'hidden'])
 export const responsePricingModeEnum = arkSchema.enum('response_pricing_mode', ['free', 'paid_response', 'success_fee', 'manual'])
 export const notificationStatusEnum = arkSchema.enum('notification_status', ['queued', 'sent', 'skipped', 'failed'])
+export const fileAccessModeEnum = arkSchema.enum('file_access_mode', ['public', 'space', 'signed_only'])
+export const fileUploadStatusEnum = arkSchema.enum('file_upload_status', ['pending', 'finalized', 'aborted', 'expired'])
 
 type FieldSlotKind = 'text' | 'number' | 'date' | 'boolean' | 'select' | 'json'
 
@@ -208,16 +211,51 @@ export const arkFiles = arkTable('files', {
   filename: text('filename').notNull(),
   originalFilename: text('original_filename'),
   mimeType: text('mime_type').notNull(),
-  sizeBytes: integer('size_bytes').notNull().default(0),
+  sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull().default(0),
   width: integer('width'),
   height: integer('height'),
   checksum: text('checksum'),
   visibility: visibilityEnum('visibility').notNull().default('private'),
+  accessMode: fileAccessModeEnum('access_mode').notNull().default('space'),
   metadataJson: jsonb('metadata_json').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
   ...timestamps(),
 }, table => [
   uniqueIndex('ark_files_path_unique').on(table.path),
   index('ark_files_owner_idx').on(table.ownerArkUserId),
+  check('ark_files_visibility_access_check', sql`(
+    (${table.visibility} = 'public' AND ${table.accessMode} = 'public') OR
+    (${table.visibility} <> 'public' AND ${table.accessMode} <> 'public')
+  )`),
+])
+
+// Upload sessions are internal infrastructure for the ark.files Code Resource.
+// They are deliberately not exposed as independently addressable Resources.
+export const arkFileUploads = arkTable('file_uploads', {
+  id: uuidPk(),
+  fileId: uuid('file_id').notNull(),
+  ownerArkUserId: uuid('owner_ark_user_id').references(() => arkUsers.id, { onDelete: 'set null' }),
+  spaceId: uuid('space_id').references(() => arkSpaces.id, { onDelete: 'set null' }),
+  storage: text('storage').notNull(),
+  bucket: text('bucket').notNull(),
+  path: text('path').notNull(),
+  originalFilename: text('original_filename').notNull(),
+  mimeType: text('mime_type').notNull(),
+  sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+  accessMode: fileAccessModeEnum('access_mode').notNull(),
+  status: fileUploadStatusEnum('status').notNull().default('pending'),
+  etag: text('etag'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+  abortedAt: timestamp('aborted_at', { withTimezone: true }),
+  objectDeletedAt: timestamp('object_deleted_at', { withTimezone: true }),
+  metadataJson: jsonb('metadata_json').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  ...timestamps(),
+}, table => [
+  uniqueIndex('ark_file_uploads_file_unique').on(table.fileId),
+  uniqueIndex('ark_file_uploads_object_unique').on(table.storage, table.bucket, table.path),
+  index('ark_file_uploads_owner_status_idx').on(table.ownerArkUserId, table.status),
+  index('ark_file_uploads_expiry_idx').on(table.status, table.expiresAt),
+  check('ark_file_uploads_size_check', sql`${table.sizeBytes} > 0`),
 ])
 
 export const arkFileVariants = arkTable('file_variants', {
@@ -228,7 +266,7 @@ export const arkFileVariants = arkTable('file_variants', {
   bucket: text('bucket').notNull().default('ark-files-private'),
   path: text('path').notNull(),
   mimeType: text('mime_type').notNull(),
-  sizeBytes: integer('size_bytes').notNull().default(0),
+  sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull().default(0),
   width: integer('width'),
   height: integer('height'),
   metadataJson: jsonb('metadata_json').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
