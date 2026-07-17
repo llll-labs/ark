@@ -15,8 +15,20 @@ const navigationItems: CoreNavigationItem[] = [
 ]
 
 export function useArkNavigation(capabilities: MaybeRefOrGetter<readonly ArkCapabilityLike[]> = []) {
+  const appConfig = useArkAppConfig()
   return computed(() => {
     const enabled = new Set(toValue(capabilities))
-    return navigationItems.filter(item => !item.capability || enabled.has(item.capability))
+    const modules = new Set(appConfig.value.modules)
+    const core = navigationItems.filter((item) => {
+      if (item.to === '/app/forum' && !modules.has('forum'))
+        return false
+      if (item.to === '/app/jobs' && !modules.has('market'))
+        return false
+      if (item.to === '/app/knowledge' && !modules.has('knowledge'))
+        return false
+      return !item.capability || enabled.has(item.capability)
+    })
+    const tenant = appConfig.value.navigation.filter(item => !item.capability || enabled.has(item.capability))
+    return [...core, ...tenant]
   })
 }

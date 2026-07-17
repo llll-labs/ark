@@ -32,6 +32,36 @@ export interface NotifyResult {
   transport: NotifyTransport | null
 }
 
+export interface ArkNotificationAttemptInput {
+  channel: string
+  error?: null | string
+  kind: string
+  payload?: Record<string, unknown>
+  recipient?: Record<string, unknown>
+  result?: Record<string, unknown>
+  sentAt?: Date | null
+  status: 'failed' | 'queued' | 'sent' | 'skipped'
+  target?: { id?: null | string, type?: null | string }
+}
+
+export async function recordArkNotificationAttempt(input: ArkNotificationAttemptInput) {
+  const [row] = await useDatabase().insert(arkNotifications).values({
+    channel: input.channel,
+    error: input.error ?? null,
+    kind: input.kind,
+    payloadJson: input.payload ?? {},
+    recipientJson: input.recipient ?? {},
+    resultJson: input.result ?? {},
+    sentAt: input.sentAt ?? (input.status === 'sent' ? new Date() : null),
+    status: input.status,
+    targetId: input.target?.id ?? null,
+    targetType: input.target?.type ?? null,
+  }).returning()
+  if (!row)
+    throw new Error('Ark notification attempt could not be recorded.')
+  return row
+}
+
 interface RecipientContacts {
   email: null | string
   telegramChatId: null | string
@@ -91,50 +121,52 @@ async function deliverTelegram(token: string, chatId: string, message: NotifyMes
  * transport is wired into core.
  */
 export async function notifyUser(input: NotifyUserInput): Promise<NotifyResult> {
-  const db = useDatabase()
   const prefer = input.prefer ?? ['telegram', 'email']
   const contacts = await resolveRecipient(input.arkUserId)
   const token = notifyBotToken()
   const base = {
-    kind: input.kind,
     payloadJson: { subject: input.message.subject, text: input.message.text },
-    targetId: input.target?.id,
-    targetType: input.target?.type,
   }
 
   for (const transport of prefer) {
     if (transport === 'telegram' && contacts.telegramChatId && token) {
       const sent = await deliverTelegram(token, contacts.telegramChatId, input.message)
-      const [row] = await db.insert(arkNotifications).values({
-        ...base,
+      const row = await recordArkNotificationAttempt({
         channel: 'telegram',
         error: sent.reason,
-        recipientJson: { arkUserId: input.arkUserId, chatId: contacts.telegramChatId },
-        resultJson: sent.result,
+        kind: input.kind,
+        payload: base.payloadJson,
+        recipient: { arkUserId: input.arkUserId, chatId: contacts.telegramChatId },
+        result: sent.result,
         sentAt: sent.ok ? new Date() : null,
         status: sent.ok ? 'sent' : 'failed',
-      }).returning()
-      return { id: row!.id, status: row!.status, transport: 'telegram' }
+        target: { id: input.target?.id, type: input.target?.type },
+      })
+      return { id: row.id, status: row.status, transport: 'telegram' }
     }
 
     if (transport === 'email' && contacts.email) {
       // No mail transport in core yet — queue so a future mailer can pick it up.
-      const [row] = await db.insert(arkNotifications).values({
-        ...base,
+      const row = await recordArkNotificationAttempt({
         channel: 'email',
-        recipientJson: { arkUserId: input.arkUserId, email: contacts.email },
+        kind: input.kind,
+        payload: base.payloadJson,
+        recipient: { arkUserId: input.arkUserId, email: contacts.email },
         status: 'queued',
-      }).returning()
-      return { id: row!.id, status: row!.status, transport: 'email' }
+        target: { id: input.target?.id, type: input.target?.type },
+      })
+      return { id: row.id, status: row.status, transport: 'email' }
     }
   }
 
-  const [row] = await db.insert(arkNotifications).values({
-    ...base,
+  const row = await recordArkNotificationAttempt({
     channel: prefer[0] ?? 'telegram',
     error: 'no reachable transport for recipient',
-    recipientJson: { arkUserId: input.arkUserId },
+    kind: input.kind,
+    payload: base.payloadJson,
+    recipient: { arkUserId: input.arkUserId },
     status: 'skipped',
-  }).returning()
-  return { id: row!.id, status: row!.status, transport: null }
+    target: { id: input.target?.id, type: input.target?.type },
+  })
+  return { id: row.id, status: row.status, transport: null }
 }

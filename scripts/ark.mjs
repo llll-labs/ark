@@ -5,6 +5,7 @@ import { copyFileSync, mkdirSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { config as loadDotenv } from 'dotenv'
+import { assertTenantBoundaries } from './ark-boundaries.mjs'
 
 const arkRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -54,6 +55,12 @@ async function main() {
 
   if (command === 'preflight') {
     preflight(args)
+    return
+  }
+
+  if (command === 'boundaries') {
+    assertTenantBoundaries(process.cwd())
+    console.log('Ark tenant boundaries passed.')
     return
   }
 
@@ -708,6 +715,7 @@ function printHelp() {
   ark db migrate-core | migrate-app | migrate
   ark docker up | down
   ark preflight [--production]
+  ark boundaries
   ark path [...segments]`)
 }
 

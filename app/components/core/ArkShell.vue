@@ -244,9 +244,13 @@ watch(
           class="flex min-w-0 items-center text-highlighted"
           :aria-label="appName"
         >
-          <ArkLogo size="sm" />
+          <slot name="logo">
+            <ArkLogo size="sm" />
+          </slot>
         </NuxtLink>
-        <ArkLogo v-else size="sm" />
+        <slot v-else name="logo">
+          <ArkLogo size="sm" />
+        </slot>
         <div class="flex-1" />
         <button
           v-if="hasCapability('settings.manage')"

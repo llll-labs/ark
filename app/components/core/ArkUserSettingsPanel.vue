@@ -4,14 +4,24 @@ import ArkSettingField from './ArkSettingField.vue'
 import ArkSettingsSection from './ArkSettingsSection.vue'
 import ArkStoreForm from './ArkStoreForm.vue'
 
+interface ArkUserSettingsSection {
+  icon: string
+  id: string
+  label: string
+}
+
 const props = withDefaults(defineProps<{
   isNarrowWindow?: boolean
+  extraSections?: ArkUserSettingsSection[]
+  hiddenSections?: string[]
   maximized?: boolean
   showClose?: boolean
   showMaximize?: boolean
   showOpenPage?: boolean
 }>(), {
   isNarrowWindow: false,
+  extraSections: () => [],
+  hiddenSections: () => [],
   maximized: false,
   showClose: false,
   showMaximize: false,
@@ -43,17 +53,15 @@ const localeModel = computed({
     void setLocale(code as typeof locale.value)
   },
 })
-const sections = computed(() => [
+const sections = computed<ArkUserSettingsSection[]>(() => [
   { id: 'profile', label: t('userSettings.sectionProfile'), icon: 'i-lucide-user-round' },
   { id: 'store', label: t('userSettings.sectionStore'), icon: 'i-lucide-briefcase' },
   { id: 'appearance', label: t('userSettings.sectionAppearance'), icon: 'i-lucide-monitor-cog' },
   { id: 'notifications', label: t('userSettings.sectionNotifications'), icon: 'i-lucide-bell' },
   { id: 'account', label: t('userSettings.sectionAccount'), icon: 'i-lucide-circle-user-round' },
-] as const)
+].filter(section => !props.hiddenSections.includes(section.id)).concat(props.extraSections))
 
-type SectionId = typeof sections['value'][number]['id']
-
-const activeSection = ref<SectionId>('profile')
+const activeSection = ref('profile')
 const loading = ref(false)
 const profile = ref<any>(null)
 const loginInfo = ref<{ providers: string[], email: string | null }>({ providers: [], email: null })
@@ -475,7 +483,7 @@ onMounted(() => {
               </template>
             </ArkSettingsSection>
 
-            <ArkSettingsSection v-else>
+            <ArkSettingsSection v-else-if="activeSection === 'account'">
               <div class="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-center">
                 <div>
                   <h4 class="text-sm font-semibold text-highlighted">
@@ -501,6 +509,12 @@ onMounted(() => {
                 </div>
               </div>
             </ArkSettingsSection>
+            <slot
+              v-else
+              :name="`section-${activeSection}`"
+              :profile="profile"
+              :reload="load"
+            />
           </div>
         </section>
       </div>
