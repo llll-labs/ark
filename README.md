@@ -96,6 +96,8 @@ For S3-compatible storage:
 STORAGE_LOCATIONS=private,public
 STORAGE_PRIVATE_DRIVER=s3
 STORAGE_PRIVATE_BUCKET=ark-files-private
+# Optional namespace inside a shared bucket:
+# STORAGE_PRIVATE_PREFIX=p3100-my-app/
 STORAGE_PRIVATE_ENDPOINT=http://localhost:5402
 STORAGE_PRIVATE_KEY=rustfsadmin
 STORAGE_PRIVATE_SECRET=rustfsadmin

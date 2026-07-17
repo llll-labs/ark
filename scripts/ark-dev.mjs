@@ -115,6 +115,9 @@ export function resolveMeiliIndexes(env, cell) {
 }
 
 export function resolveStorageLocations(env, cell) {
+  const isolation = (env.ARK_DEV_STORAGE_ISOLATION || 'bucket').trim().toLowerCase()
+  if (!['bucket', 'prefix'].includes(isolation))
+    throw new Error('ARK_DEV_STORAGE_ISOLATION must be bucket or prefix.')
   return parseList(required(env, 'ARK_DEV_STORAGE_LOCATIONS')).map((name) => {
     const normalized = name.toLowerCase()
     if (!/^[a-z][a-z0-9_]*$/.test(normalized))
@@ -123,15 +126,19 @@ export function resolveStorageLocations(env, cell) {
     const driver = required(env, `${prefix}_DRIVER`).toLowerCase()
     if (driver !== 's3')
       throw new Error(`${prefix}_DRIVER must be s3 for Ark remote development.`)
-    const bucket = `${cell.id}-${normalized.replaceAll('_', '-')}`
+    const bucket = isolation === 'prefix'
+      ? required(env, `${prefix}_BUCKET`)
+      : `${cell.id}-${normalized.replaceAll('_', '-')}`
     if (bucket.length > 63)
       throw new Error(`S3 bucket name is too long: ${bucket}`)
     return {
       bucket,
       envPrefix: prefix,
       forcePathStyle: (env[`${prefix}_FORCE_PATH_STYLE`] ?? 'true') !== 'false',
+      isolation,
       key: required(env, `${prefix}_KEY`),
       name: normalized,
+      objectPrefix: isolation === 'prefix' ? `${cell.id}/` : '',
       endpoint: required(env, `${prefix}_ENDPOINT`),
       region: env[`${prefix}_REGION`] || 'auto',
       secret: required(env, `${prefix}_SECRET`),
@@ -155,7 +162,7 @@ export function buildRuntimeOverlay(env, cell, indexes, locations) {
     BETTER_AUTH_TRUSTED_ORIGINS: trustedOrigins.join(','),
     FILES_PUBLIC_URL: cell.publicUrl,
     NUXT_PUBLIC_SITE_URL: cell.publicUrl,
-    STORAGE_AUTO_CREATE_BUCKETS: 'true',
+    STORAGE_AUTO_CREATE_BUCKETS: locations.some(location => location.isolation === 'prefix') ? 'false' : 'true',
     VITE_ALLOWED_HOSTS: new URL(cell.publicUrl).hostname,
     VITE_HMR_ORIGIN: cell.publicUrl,
   }
@@ -163,7 +170,9 @@ export function buildRuntimeOverlay(env, cell, indexes, locations) {
     overlay[index.envName] = index.uid
   for (const location of locations) {
     overlay[`${location.envPrefix}_BUCKET`] = location.bucket
-    overlay[`${location.envPrefix}_PUBLIC_URL`] = ''
+    overlay[`${location.envPrefix}_PREFIX`] = location.objectPrefix
+    if (location.isolation === 'bucket')
+      overlay[`${location.envPrefix}_PUBLIC_URL`] = ''
   }
   return overlay
 }
@@ -251,11 +260,11 @@ async function bucketExists(client, bucket) {
   }
 }
 
-async function emptyBucket(client, bucket) {
+export async function emptyBucket(client, bucket, prefix = '') {
   let keyMarker
   let versionIdMarker
   do {
-    const page = await client.send(new ListObjectVersionsCommand({ Bucket: bucket, KeyMarker: keyMarker, VersionIdMarker: versionIdMarker }))
+    const page = await client.send(new ListObjectVersionsCommand({ Bucket: bucket, KeyMarker: keyMarker, Prefix: prefix || undefined, VersionIdMarker: versionIdMarker }))
     const objects = [...(page.Versions || []), ...(page.DeleteMarkers || [])]
       .map(item => ({ Key: item.Key, VersionId: item.VersionId }))
       .filter(item => item.Key)
@@ -269,7 +278,7 @@ async function emptyBucket(client, bucket) {
 
   let continuationToken
   do {
-    const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: continuationToken }))
+    const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: continuationToken, Prefix: prefix || undefined }))
     const objects = (page.Contents || []).map(item => ({ Key: item.Key })).filter(item => item.Key)
     if (objects.length)
       await client.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: objects, Quiet: true } }))
@@ -281,8 +290,13 @@ async function ensureBuckets(locations, cell) {
   const allowedOrigins = [cell.publicUrl, `http://localhost:${cell.port}`, `http://127.0.0.1:${cell.port}`]
   for (const location of locations) {
     const client = storageClient(location)
-    if (!await bucketExists(client, location.bucket))
+    const exists = await bucketExists(client, location.bucket)
+    if (!exists && location.isolation === 'prefix')
+      throw new Error(`Shared S3 bucket does not exist: ${location.bucket}`)
+    if (!exists)
       await client.send(new CreateBucketCommand({ Bucket: location.bucket }))
+    if (location.isolation === 'prefix')
+      continue
     await client.send(new PutBucketCorsCommand({
       Bucket: location.bucket,
       CORSConfiguration: {
@@ -304,8 +318,15 @@ async function destroyBuckets(locations, cell) {
     const client = storageClient(location)
     if (!await bucketExists(client, location.bucket))
       continue
-    await emptyBucket(client, location.bucket)
-    await client.send(new DeleteBucketCommand({ Bucket: location.bucket }))
+    if (location.isolation === 'prefix') {
+      if (location.objectPrefix !== `${cell.id}/`)
+        throw new Error(`Refusing destructive operation for unsafe storage prefix: ${location.objectPrefix}`)
+      await emptyBucket(client, location.bucket, location.objectPrefix)
+    }
+    else {
+      await emptyBucket(client, location.bucket)
+      await client.send(new DeleteBucketCommand({ Bucket: location.bucket }))
+    }
   }
 }
 
@@ -380,7 +401,7 @@ function printTargets(cell, indexes, locations) {
   console.log(`  URL: ${cell.publicUrl}`)
   console.log(`  Postgres: ${cell.id}`)
   console.log(`  Meilisearch: ${indexes.length ? indexes.map(item => item.uid).join(', ') : '(none)'}`)
-  console.log(`  S3: ${locations.map(item => item.bucket).join(', ')}`)
+  console.log(`  S3: ${locations.map(item => `${item.bucket}/${item.objectPrefix}`).join(', ')}`)
 }
 
 function forwardedArkArgs(argv) {

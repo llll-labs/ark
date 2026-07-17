@@ -23,6 +23,7 @@ interface ArkBaseStorageLocation {
   bucket: string
   driver: ArkStorageDriver
   name: string
+  prefix: string
   publicUrl?: string
   signedUrlExpiresSeconds: number
 }
@@ -97,6 +98,25 @@ function intValue(value: string | undefined, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
+export function normalizeStoragePrefix(value: string | undefined) {
+  const trimmed = String(value ?? '').trim().replace(/^\/+|\/+$/g, '')
+  if (!trimmed)
+    return ''
+  const segments = trimmed.split('/')
+  if (segments.some(segment => !segment || segment === '.' || segment === '..' || !/^[\w.-]+$/.test(segment)))
+    throw new Error(`Invalid storage prefix: ${value}`)
+  return `${segments.join('/')}/`
+}
+
+export function storageObjectPath(location: Pick<ArkStorageLocation, 'prefix'>, path: string) {
+  if (!path || path.startsWith('/') || path.includes('\\'))
+    throw new Error(`Storage object path must be relative: ${path}`)
+  const segments = path.split('/')
+  if (segments.some(segment => !segment || segment === '.' || segment === '..'))
+    throw new Error(`Storage object path is unsafe: ${path}`)
+  return `${location.prefix}${path}`
+}
+
 function required(value: string | undefined, key: string) {
   if (!value)
     throw new Error(`${key} is required for Ark S3 storage.`)
@@ -135,6 +155,7 @@ export function parseStorageConfig(env: NodeJS.ProcessEnv = process.env): ArkSto
         bucket: env[envKey(name, 'BUCKET')] || name,
         driver,
         name,
+        prefix: normalizeStoragePrefix(env[envKey(name, 'PREFIX')]),
         publicUrl: env[envKey(name, 'PUBLIC_URL')] || undefined,
         root: env[envKey(name, 'ROOT')] || resolveArkDataPath('uploads', env),
         signedUrlExpiresSeconds,
@@ -153,6 +174,7 @@ export function parseStorageConfig(env: NodeJS.ProcessEnv = process.env): ArkSto
       forcePathStyle: boolValue(env[envKey(name, 'FORCE_PATH_STYLE')], true),
       key: required(env[keyKey], keyKey),
       name,
+      prefix: normalizeStoragePrefix(env[envKey(name, 'PREFIX')]),
       publicUrl: env[envKey(name, 'PUBLIC_URL')] || undefined,
       region: env[envKey(name, 'REGION')] || 'auto',
       secret: required(env[secretKey], secretKey),
@@ -269,8 +291,9 @@ function localObjectPath(location: ArkLocalStorageLocation, path: string) {
 }
 
 export async function putStoredObject(location: ArkStorageLocation, path: string, body: Buffer, contentType: string) {
+  const objectPath = storageObjectPath(location, path)
   if (location.driver === 'local') {
-    const target = localObjectPath(location, path)
+    const target = localObjectPath(location, objectPath)
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, body)
     return
@@ -282,7 +305,7 @@ export async function putStoredObject(location: ArkStorageLocation, path: string
     Bucket: location.bucket,
     ContentLength: body.length,
     ContentType: contentType,
-    Key: path,
+    Key: objectPath,
   }))
 }
 
@@ -299,6 +322,7 @@ export async function createDirectUploadUrl(
     throw new Error('Direct upload URL expiry must be between 1 and 3600 seconds.')
 
   await ensureBucket(location)
+  const objectPath = storageObjectPath(location, path)
   return getSignedUrl(
     s3Client(location),
     new PutObjectCommand({
@@ -308,7 +332,7 @@ export async function createDirectUploadUrl(
       // A URL may remain valid briefly after finalization. Conditional creation
       // makes every retry fail once the first object exists, preventing mutation.
       IfNoneMatch: '*',
-      Key: path,
+      Key: objectPath,
     }),
     { expiresIn: expiresInSeconds },
   )
@@ -321,7 +345,7 @@ export async function headStoredObject(ref: StoredObjectRef): Promise<StoredObje
 
   const result = await s3Client(location).send(new HeadObjectCommand({
     Bucket: ref.bucket,
-    Key: ref.path,
+    Key: storageObjectPath(location, ref.path),
   }))
   return {
     contentLength: Number(result.ContentLength ?? 0),
@@ -337,24 +361,25 @@ export async function deleteStoredObject(locationOrRef: ArkStorageLocation | Sto
   const objectPath = 'driver' in locationOrRef ? path : locationOrRef.path
   if (!objectPath)
     throw new Error('Stored object path is required.')
+  const physicalPath = storageObjectPath(location, objectPath)
   if (location.driver === 'local') {
-    await rm(localObjectPath(location, objectPath), { force: true })
+    await rm(localObjectPath(location, physicalPath), { force: true })
     return
   }
   await s3Client(location).send(new DeleteObjectCommand({
     Bucket: 'driver' in locationOrRef ? location.bucket : locationOrRef.bucket,
-    Key: objectPath,
+    Key: physicalPath,
   }))
 }
 
 export async function readStoredObject(ref: StoredObjectRef) {
   const location = resolveStorageLocation(ref.storage)
   if (location.driver === 'local')
-    return createReadStream(localObjectPath(location, ref.path))
+    return createReadStream(localObjectPath(location, storageObjectPath(location, ref.path)))
 
   const result = await s3Client(location).send(new GetObjectCommand({
     Bucket: ref.bucket,
-    Key: ref.path,
+    Key: storageObjectPath(location, ref.path),
   }))
 
   if (!result.Body)
@@ -383,7 +408,7 @@ export async function signedReadUrl(ref: StoredObjectRef, options: { disposition
     s3Client(location),
     new GetObjectCommand({
       Bucket: ref.bucket,
-      Key: ref.path,
+      Key: storageObjectPath(location, ref.path),
       ResponseContentDisposition: options.disposition,
     }),
     { expiresIn },
@@ -395,7 +420,8 @@ export function publicObjectUrl(ref: StoredObjectRef) {
   if (!location.publicUrl)
     return null
 
-  return `${location.publicUrl.replace(/\/+$/, '')}/${ref.path.split('/').map(encodeURIComponent).join('/')}`
+  const path = storageObjectPath(location, ref.path)
+  return `${location.publicUrl.replace(/\/+$/, '')}/${path.split('/').map(encodeURIComponent).join('/')}`
 }
 
 function canonicalSignedFilePayload(input: Required<SignedFileUrlInput> & { version: string }) {
