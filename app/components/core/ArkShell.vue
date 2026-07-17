@@ -18,18 +18,28 @@ interface AppSettingsSection {
   slot?: string
 }
 
+interface UserSettingsSection {
+  icon: string
+  id: string
+  label: string
+}
+
 const props = withDefaults(defineProps<{
   appSettingsSections?: AppSettingsSection[]
   hiddenNavigationRoutes?: string[]
   logoTo?: string
   pageNavigationRoute?: string
   rootSpaceRoute?: string
+  userSettingsExtraSections?: UserSettingsSection[]
+  userSettingsHiddenSections?: string[]
 }>(), {
   appSettingsSections: () => [],
   hiddenNavigationRoutes: () => [],
   logoTo: '',
   pageNavigationRoute: '/app',
   rootSpaceRoute: '/app/jobs',
+  userSettingsExtraSections: () => [],
+  userSettingsHiddenSections: () => [],
 })
 
 const route = useRoute()
@@ -523,7 +533,15 @@ watch(
         <slot :name="`settings-${appSettingsSlotName(section)}`" />
       </template>
     </ArkSettingsModal>
-    <ArkUserSettingsModal v-model:open="userSettingsOpen" />
+    <ArkUserSettingsModal
+      v-model:open="userSettingsOpen"
+      :extra-sections="props.userSettingsExtraSections"
+      :hidden-sections="props.userSettingsHiddenSections"
+    >
+      <template v-for="section in props.userSettingsExtraSections" #[`section-${section.id}`]="slotProps">
+        <slot :name="`user-settings-${section.id}`" v-bind="slotProps || {}" />
+      </template>
+    </ArkUserSettingsModal>
 
     <ArkCreateChannelModal
       v-model:open="createChannelOpen"
