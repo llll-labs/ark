@@ -1,7 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import { defineNuxtConfig } from 'nuxt/config'
 import arkAppModule from './modules/ark-app'
-import { defaultArkAppConfig } from './types/ark-app'
 
 function devHostFromValue(raw: string) {
   const value = raw.trim()
@@ -97,9 +96,6 @@ function devCssModuleImportQueryPlugin() {
 }
 
 export default defineNuxtConfig({
-  ark: {
-    app: defaultArkAppConfig,
-  },
   compatibilityDate: '2026-05-19',
   modules: [arkAppModule, '@nuxt/ui', '@pinia/nuxt', '@nuxtjs/i18n'],
   // Auto-import layer components by bare filename (no path-prefix) so they can be
