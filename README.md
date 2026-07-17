@@ -34,8 +34,30 @@ Extend Ark from a Nuxt tenant app:
 ```ts
 export default defineNuxtConfig({
   extends: ['@kurark/ark'],
+  ark: {
+    app: {
+      home: '/app/overview',
+      modules: ['user-settings', 'workspace-settings'],
+      navigation: [
+        { id: 'overview', label: 'nav.overview', icon: 'i-lucide-layout-dashboard', to: '/app/overview' },
+      ],
+    },
+  },
 })
 ```
+
+Ark owns the `/app` host, shell, and built-in route implementations. A tenant
+opts into built-in modules with `ark.app.modules` and contributes ordinary Nuxt
+pages plus navigation entries for its product. Disabled Ark modules are removed
+from the generated page tree, so their URLs return 404 rather than remaining as
+hidden inherited routes. The available modules are `channels`, `spaces`,
+`market`, `forum`, `knowledge`, `user-settings`, `workspace-settings`, and
+`admin`.
+
+Tenant branding and settings content use Ark component slots. Tenant code must
+not shadow core `Ark*` components. Run `ark boundaries` in a tenant to reject
+component shadows, tRPC usage, direct interactive writes to Ark tables, and a
+non-canonical Ark dependency.
 
 ## Runtime
 
@@ -190,6 +212,23 @@ For endpoints composing several Resources, call
 `scope.services.resource('jobs')`. Accountability distinguishes the Better Auth
 principal (`userId`) from the provisioned Ark profile (`arkUserId`); `spaceId`
 is the active domain actor.
+
+Interactive tenant workflows that create Ark conversations or mutate owned
+files use the deeper Domain interfaces instead of writing aggregate tables:
+
+```ts
+import { withArkConversationTransaction } from '@kurark/ark/server/domain/conversations'
+import { createArkFileService } from '@kurark/ark/server/domain/files'
+```
+
+`withArkConversationTransaction()` atomically composes tenant rows with channel,
+membership, message, relation, counter, Hook, and realtime behaviour.
+`createArkFileService()` owns file-owner checks, namespaced metadata merging,
+and soft deletion. Controlled imports and repair jobs use
+`runArkSystemImport()` from `@kurark/ark/server/domain/system-import`; the
+required reason and explicit event mode make that privileged path visible.
+Tenant-managed delivery audits use `recordArkNotificationAttempt()`, while
+recipient-addressed notifications continue to use `notifyUser()`.
 
 List queries support `limit`, `offset`, `sort`, `fields`, JSON `filter`, and
 Directus-style bracket filters such as

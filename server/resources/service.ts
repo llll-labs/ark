@@ -428,7 +428,7 @@ export function createArkResourceServices(options: ArkResourceServiceOptions): A
 }
 
 export async function withArkResourceTransaction<T>(
-  options: Required<Pick<ArkResourceServiceOptions, 'accountability' | 'database'>> & Pick<ArkResourceServiceOptions, 'authorization'>,
+  options: Required<Pick<ArkResourceServiceOptions, 'accountability' | 'database'>> & Pick<ArkResourceServiceOptions, 'authorization' | 'emitEvents'>,
   handler: (context: { database: any, services: ArkResourceServices }) => Promise<T>,
 ) {
   return runResourceTransaction(options.database, undefined, async (database) => {
@@ -436,6 +436,7 @@ export async function withArkResourceTransaction<T>(
       accountability: options.accountability,
       authorization: options.authorization,
       database,
+      emitEvents: options.emitEvents,
       transaction: database,
     })
     return handler({ database, services })

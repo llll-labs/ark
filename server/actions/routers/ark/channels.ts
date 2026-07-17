@@ -1,5 +1,5 @@
 import type { ArkUserRow } from './shared'
-import { withArkResourceTransaction } from '../../../resources/service'
+import { withArkConversationTransaction } from '../../../domain/conversations'
 import {
   and,
   arkActionResourceAccountability,
@@ -10,7 +10,6 @@ import {
   byIdSchema,
   arkChannelCategories,
   channelCreateSchema,
-  arkChannelMembers,
   arkChannels,
   createArkActionRouter,
   desc,
@@ -169,19 +168,21 @@ export const channelsRouter = createArkActionRouter({
       const category = await ensureDefaultChannelCategory(input.spaceId)
       categoryId = category.id
     }
-    return withArkResourceTransaction({
+    return withArkConversationTransaction({
       accountability: arkActionResourceAccountability(ctx, {
         arkUserId: arkUser?.id,
         capabilities: access.capabilities,
         spaceId: input.spaceId,
       }),
-      authorization: 'domain',
       database: ctx.db,
-    }, async ({ database, services }) => {
-      const channel = await services.resource('ark.channels').create({
+    }, async ({ conversations }) => {
+      const channel = await conversations.createChannel({
         categoryId,
         createdByArkUserId: arkUser?.id,
         kind: input.kind,
+        memberArkUserIds: (input.visibility === 'private' || input.kind === 'dm') && arkUser
+          ? [arkUser.id, ...input.memberArkUserIds]
+          : [],
         name: input.name,
         slug: input.slug ?? slugify(input.name),
         spaceId: input.spaceId,
@@ -189,14 +190,6 @@ export const channelsRouter = createArkActionRouter({
         targetType: input.targetType,
         visibility: input.visibility,
       }) as typeof arkChannels.$inferSelect
-      if ((channel.visibility === 'private' || channel.kind === 'dm') && arkUser) {
-        const memberIds = new Set([arkUser.id, ...input.memberArkUserIds])
-        await database.insert(arkChannelMembers).values(Array.from(memberIds).map(arkUserId => ({
-          arkUserId,
-          channelId: channel.id,
-          status: 'active' as const,
-        }))).onConflictDoNothing()
-      }
       return channel
     })
   }),
@@ -218,28 +211,23 @@ export const channelsRouter = createArkActionRouter({
       return existing
     const access = await ctx.auth.capabilitiesFor(dmSpace.id)
     try {
-      return await withArkResourceTransaction({
+      return await withArkConversationTransaction({
         accountability: arkActionResourceAccountability(ctx, {
           arkUserId: me.id,
           capabilities: access.capabilities,
           spaceId: dmSpace.id,
         }),
-        authorization: 'domain',
         database: ctx.db,
-      }, async ({ database, services }) => {
-        const channel = await services.resource('ark.channels').create({
+      }, async ({ conversations }) => {
+        const channel = await conversations.createChannel({
           identityKey,
           kind: 'dm',
+          memberArkUserIds: memberIds,
           name: 'Direct message',
           slug: `dm-${memberIds.map(id => id.slice(0, 8)).join('-')}`,
           spaceId: dmSpace.id,
           visibility: 'private',
         }) as typeof arkChannels.$inferSelect
-        await database.insert(arkChannelMembers).values(memberIds.map(arkUserId => ({
-          arkUserId,
-          channelId: channel.id,
-          status: 'active' as const,
-        }))).onConflictDoNothing()
         return channel
       })
     }
@@ -274,15 +262,14 @@ export const channelsRouter = createArkActionRouter({
       return existing
 
     try {
-      return await withArkResourceTransaction({
+      return await withArkConversationTransaction({
         accountability: arkActionResourceAccountability(ctx, {
           arkUserId: access.arkUser.id,
           capabilities: access.capabilities,
           spaceId: message.spaceId,
         }),
-        authorization: 'domain',
         database: ctx.db,
-      }, ({ services }) => services.resource('ark.channels').create({
+      }, ({ conversations }) => conversations.createChannel({
         createdByArkUserId: access.arkUser!.id,
         identityKey,
         kind: 'thread',
@@ -430,7 +417,13 @@ export const messagesRouter = createArkActionRouter({
   create: arkUserAction.input(messageCreateSchema).mutation(async ({ ctx, input }) => {
     const { access, channel } = await getChannelForAccess(input.channelId, ctx, 'messages.create')
     const arkUser = access.arkUser ?? await ctx.auth.arkUser()
-    const message = await withArkResourceTransaction({
+    if (input.forumParentMessageId && channel.kind !== 'forum') {
+      throw new ArkActionError({
+        code: 'BAD_REQUEST',
+        message: 'Forum parent replies are only available in forum channels.',
+      })
+    }
+    return withArkConversationTransaction({
       accountability: {
         arkUserId: arkUser?.id ?? null,
         capabilities: access.capabilities,
@@ -438,86 +431,19 @@ export const messagesRouter = createArkActionRouter({
         system: false,
         userId: ctx.session?.user?.id ?? null,
       },
-      authorization: 'domain',
       database: ctx.db,
-    }, async ({ database, services }) => {
-      let rootMessageId: string | null = null
-      let messageRelation: { relationType: 'forum_parent' | 'reply_quote', targetId: string, targetType: 'message' } | null = null
-
-      if (input.replyToMessageId) {
-        const [target] = await database.select().from(arkMessages).where(and(
-          eq(arkMessages.id, input.replyToMessageId),
-          isNull(arkMessages.deletedAt),
-        )).limit(1)
-        if (!target || target.channelId !== channel.id) {
-          throw new ArkActionError({
-            code: 'BAD_REQUEST',
-            message: 'Reply target must be an existing message in this channel.',
-          })
-        }
-        messageRelation = {
-          relationType: 'reply_quote',
-          targetId: target.id,
-          targetType: 'message',
-        }
-      }
-
-      if (input.forumParentMessageId) {
-        if (channel.kind !== 'forum') {
-          throw new ArkActionError({
-            code: 'BAD_REQUEST',
-            message: 'Forum parent replies are only available in forum channels.',
-          })
-        }
-        const [target] = await database.select().from(arkMessages).where(and(
-          eq(arkMessages.id, input.forumParentMessageId),
-          isNull(arkMessages.deletedAt),
-        )).limit(1)
-        if (!target || target.channelId !== channel.id) {
-          throw new ArkActionError({
-            code: 'BAD_REQUEST',
-            message: 'Forum parent must be an existing message in this channel.',
-          })
-        }
-        rootMessageId = target.rootMessageId ?? target.id
-        messageRelation = {
-          relationType: 'forum_parent',
-          targetId: target.id,
-          targetType: 'message',
-        }
-      }
-
-      const created = await services.resource('ark.messages').create({
+    }, ({ conversations }) => conversations.createMessage({
         authorArkUserId: arkUser?.id,
         body: input.body,
         bodyJson: input.bodyJson,
         channelId: channel.id,
-        rootMessageId,
+        relations: input.forumParentMessageId
+          ? [{ relationType: 'forum_parent', targetId: input.forumParentMessageId, targetType: 'message' }]
+          : input.replyToMessageId
+            ? [{ relationType: 'reply_quote', targetId: input.replyToMessageId, targetType: 'message' }]
+            : [],
         spaceId: channel.spaceId,
-      }) as typeof arkMessages.$inferSelect
-      if (created.channelId !== channel.id || created.spaceId !== channel.spaceId)
-        throw new ArkActionError({ code: 'BAD_REQUEST', message: 'Message lifecycle changed its channel boundary.' })
-
-      if (messageRelation) {
-        await database.insert(arkMessageRelations).values({
-          messageId: created.id,
-          ...messageRelation,
-        }).onConflictDoNothing()
-      }
-      await services.resource('ark.channels').update(channel.id, {
-        lastMessageAt: new Date(),
-        lastMessagePreview: messagePreview(created),
-        messagesCount: sql`${arkChannels.messagesCount} + 1`,
-        updatedAt: new Date(),
-      })
-      return created
-    })
-    publishChatEvent({
-      channelId: channel.id,
-      reason: 'created',
-      type: 'messages:changed',
-    })
-    return message
+      }))
   }),
   react: arkUserAction.input(z.object({ emoji: z.string().min(1).max(32), messageId: z.uuid() })).mutation(async ({ ctx, input }) => {
     const [message] = await ctx.db.select().from(arkMessages).where(and(

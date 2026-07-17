@@ -39,6 +39,7 @@ const { t } = useI18n()
 const route = useRoute()
 
 const mode = ref<'forgot' | 'login' | 'register'>('login')
+const displayName = ref('')
 const email = ref('')
 const password = ref('')
 const passwordConfirm = ref('')
@@ -56,6 +57,8 @@ const hasTelegramMiniLaunch = ref(false)
 const telegramMiniAutoAuthStarted = ref(false)
 const errorMessage = ref('')
 const infoMessage = ref('')
+const passwordVisible = ref(false)
+const passwordConfirmVisible = ref(false)
 
 const authJson = computed<Record<string, any>>(() => {
   const value = settings.value?.authJson
@@ -65,6 +68,7 @@ const emailPasswordEnabled = computed(() => authJson.value.email_password_enable
 const telegramEnabled = computed(() => Boolean(authJson.value.telegram_enabled))
 const registrationMode = computed(() => String(authJson.value.registration_mode ?? (authJson.value.registration_enabled === false ? 'closed' : 'open')))
 const registrationEnabled = computed(() => registrationMode.value === 'open')
+const registrationNameRequired = computed(() => String(authJson.value.registration_name_mode ?? 'derived') === 'required')
 const inviteLikeRegistration = computed(() => ['invite', 'invited', 'invite_only', 'invite-only'].includes(registrationMode.value))
 const telegramOauthConfigured = computed(() => Boolean(telegramOAuthStatus.value?.configured))
 const discordOauthConfigured = computed(() => Boolean(discordOAuthStatus.value?.configured))
@@ -80,6 +84,8 @@ const resetPasswordToken = computed(() => {
 })
 const resetPasswordsMatch = computed(() => !resetPasswordConfirm.value || resetPassword.value === resetPasswordConfirm.value)
 const canSubmit = computed(() => {
+  if (mode.value === 'register' && registrationNameRequired.value && !displayName.value.trim())
+    return false
   if (!email.value.trim() || !password.value)
     return false
   if (!passwordsMatch.value)
@@ -197,6 +203,10 @@ async function submit() {
     return
   if (!verifyingEmail.value && mode.value === 'register' && !registrationEnabled.value)
     return
+  if (!verifyingEmail.value && mode.value === 'register' && registrationNameRequired.value && !displayName.value.trim()) {
+    errorMessage.value = t('auth.displayNameRequired')
+    return
+  }
   if (!verifyingEmail.value && mode.value === 'register' && !passwordsMatch.value) {
     errorMessage.value = t('auth.passwordMismatch')
     return
@@ -214,7 +224,7 @@ async function submit() {
       const trimmedEmail = email.value.trim()
       await auth.register({
         email: trimmedEmail,
-        name: trimmedEmail.split('@')[0] || trimmedEmail,
+        name: displayName.value.trim() || trimmedEmail.split('@')[0] || trimmedEmail,
         password: password.value,
       })
       startEmailVerification(trimmedEmail)
@@ -334,7 +344,9 @@ watch(legalRequired, (required) => {
   <div>
     <header v-if="brandTitle || intentTitle || brandSubtitle || stats.length" class="text-center">
       <div v-if="brandTitle" class="flex justify-center text-primary">
-        <ArkLogo size="md" />
+        <slot name="logo">
+          <ArkLogo size="md" />
+        </slot>
       </div>
       <h2 v-else class="text-3xl font-semibold text-primary">
         {{ brandTitle || intentTitle || $t('auth.tabLogin') }}
@@ -530,6 +542,17 @@ watch(legalRequired, (required) => {
 
         <form v-else-if="!verifyingEmail && !resetPasswordToken" class="space-y-4" @submit.prevent="submit">
           <UInput
+            v-if="mode === 'register' && registrationNameRequired"
+            v-model="displayName"
+            class="w-full"
+            icon="i-lucide-user-round"
+            :placeholder="$t('auth.displayName')"
+            size="md"
+            type="text"
+            variant="none"
+            :ui="inputUi"
+          />
+          <UInput
             v-model="email"
             autofocus
             class="w-full"
@@ -546,10 +569,16 @@ watch(legalRequired, (required) => {
             icon="i-lucide-lock"
             :placeholder="$t('auth.password')"
             size="md"
-            type="password"
+            :type="passwordVisible ? 'text' : 'password'"
             variant="none"
             :ui="inputUi"
-          />
+          >
+            <template #trailing>
+              <button type="button" class="text-muted hover:text-default" :aria-label="passwordVisible ? $t('auth.hidePassword') : $t('auth.showPassword')" @click="passwordVisible = !passwordVisible">
+                <UIcon :name="passwordVisible ? 'i-lucide-eye-off' : 'i-lucide-eye'" class="size-4" />
+              </button>
+            </template>
+          </UInput>
           <UInput
             v-if="mode === 'register'"
             v-model="passwordConfirm"
@@ -557,20 +586,35 @@ watch(legalRequired, (required) => {
             icon="i-lucide-lock-keyhole"
             :placeholder="$t('auth.passwordConfirm')"
             size="md"
-            type="password"
+            :type="passwordConfirmVisible ? 'text' : 'password'"
             variant="none"
             :ui="inputUi"
-          />
+          >
+            <template #trailing>
+              <button type="button" class="text-muted hover:text-default" :aria-label="passwordConfirmVisible ? $t('auth.hidePassword') : $t('auth.showPassword')" @click="passwordConfirmVisible = !passwordConfirmVisible">
+                <UIcon :name="passwordConfirmVisible ? 'i-lucide-eye-off' : 'i-lucide-eye'" class="size-4" />
+              </button>
+            </template>
+          </UInput>
           <p v-if="mode === 'register' && passwordConfirm && !passwordsMatch" class="text-xs text-error">
             {{ $t('auth.passwordMismatch') }}
           </p>
 
-          <ArkAuthLegalLinks
-            v-model:accepted="legalAccepted"
+          <slot
+            name="auth-legal"
+            :accepted="legalAccepted"
             :mode="mode === 'register' ? 'register' : 'login'"
-            @navigate="emit('navigate')"
-            @update:required="legalRequired = $event"
-          />
+            :set-accepted="(value: boolean) => legalAccepted = value"
+            :set-required="(value: boolean) => legalRequired = value"
+            :navigate="() => emit('navigate')"
+          >
+            <ArkAuthLegalLinks
+              v-model:accepted="legalAccepted"
+              :mode="mode === 'register' ? 'register' : 'login'"
+              @navigate="emit('navigate')"
+              @update:required="legalRequired = $event"
+            />
+          </slot>
 
           <div class="grid gap-2 border-t border-default pt-4">
             <UButton

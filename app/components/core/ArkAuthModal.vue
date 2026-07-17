@@ -72,7 +72,14 @@ function finishAuth() {
           :stats="stats"
           @authenticated="finishAuth"
           @navigate="closeForNavigation"
-        />
+        >
+          <template v-if="$slots.logo" #logo>
+            <slot name="logo" />
+          </template>
+          <template v-if="$slots['auth-legal']" #auth-legal="slotProps">
+            <slot name="auth-legal" v-bind="slotProps" />
+          </template>
+        </ArkAuthPanel>
 
         <ArkLocaleSelect class="mt-4" />
       </div>
