@@ -28,7 +28,9 @@ Development policy uses the `ARK_DEV_*` namespace:
 ARK_DEV_SLOT=example-app-alice
 ARK_DEV_BASE_URL=https://dev.example.com
 ARK_DEV_PORT_RANGE=3100-3199
-ARK_DEV_STORAGE_LOCATIONS=public,private,quarantine
+ARK_DEV_STORAGE_LOCATIONS=public,private
+# Optional: share the configured development buckets and isolate by Cell prefix.
+ARK_DEV_STORAGE_ISOLATION=prefix
 ARK_DEV_MEILISEARCH_INDEXES=MEILISEARCH_ASSETS_INDEX
 ```
 
@@ -42,7 +44,7 @@ MEILISEARCH_URL=https://meili.stage.example
 MEILISEARCH_KEY=replace-me
 MEILISEARCH_ASSETS_INDEX=assets
 
-STORAGE_LOCATIONS=public,private,quarantine
+STORAGE_LOCATIONS=public,private
 STORAGE_PRIVATE_DRIVER=s3
 STORAGE_PRIVATE_ENDPOINT=https://s3.stage.example
 STORAGE_PRIVATE_KEY=replace-me
@@ -52,7 +54,9 @@ STORAGE_PRIVATE_BUCKET=stage-private
 
 `ARK_DEV_MEILISEARCH_INDEXES` is a comma-separated list of runtime env variable names. The base value of each named variable is its logical index suffix. For example, `MEILISEARCH_ASSETS_INDEX=assets` becomes `<CELL_ID>-assets` inside a Development Cell.
 
-`ARK_DEV_STORAGE_LOCATIONS` is a comma-separated list of logical locations that receive isolated physical buckets. Each listed location must have complete S3 runtime configuration in the base env.
+`ARK_DEV_STORAGE_LOCATIONS` is a comma-separated list of logical locations that receive isolated object namespaces. Each listed location must have complete S3 runtime configuration in the base env.
+
+Storage isolation defaults to `ARK_DEV_STORAGE_ISOLATION=bucket`, which derives one physical bucket per Cell and preserves the original Ark Dev behavior. `ARK_DEV_STORAGE_ISOLATION=prefix` keeps each configured base bucket and supplies `STORAGE_<LOCATION>_PREFIX=<CELL_ID>/` only to the child process. Prefix mode is intended for shared development buckets whose credentials and CORS are managed externally.
 
 ## Identity and naming
 
@@ -70,9 +74,8 @@ For `PORT=3150` and `ARK_DEV_SLOT=example-app-alice`:
 Cell ID:       p3150-example-app-alice
 Postgres:      p3150-example-app-alice
 Meilisearch:   p3150-example-app-alice-assets
-S3 public:     p3150-example-app-alice-public
-S3 private:    p3150-example-app-alice-private
-S3 quarantine: p3150-example-app-alice-quarantine
+S3 public:     stage-public/p3150-example-app-alice/
+S3 private:    stage-private/p3150-example-app-alice/
 Public URL:    https://p3150-example-app-alice.dev.example.com
 ```
 
@@ -92,8 +95,8 @@ The tenant's `dev` script invokes the `ark-dev` binary shipped from `scripts/ark
 1. Loads the tenant `.env`.
 2. Resolves `PORT`, validates it against `ARK_DEV_PORT_RANGE`, and derives the Cell ID.
 3. Validates remote Postgres, Meilisearch, and S3 credentials.
-4. Creates any missing Cell database, indexes, and physical buckets without changing existing Cell data.
-5. Applies development CORS to every Cell bucket.
+4. Creates any missing Cell database and indexes without changing existing Cell data.
+5. Prepares the configured storage namespace: it creates and configures dedicated Cell buckets in bucket mode, or verifies the shared buckets in prefix mode.
 6. Builds an in-memory runtime overlay.
 7. Launches `ark dev` with the selected port and derived public URL.
 
@@ -107,7 +110,8 @@ The child process receives derived overrides for:
 
 - `PORT`
 - `DATABASE_URL`
-- every bucket variable named by `ARK_DEV_STORAGE_LOCATIONS`
+- every bucket variable named by `ARK_DEV_STORAGE_LOCATIONS` in bucket mode
+- every `STORAGE_<LOCATION>_PREFIX` named by `ARK_DEV_STORAGE_LOCATIONS` in prefix mode
 - every Meilisearch index variable named by `ARK_DEV_MEILISEARCH_INDEXES`
 - `BETTER_AUTH_URL`
 - `BETTER_AUTH_TRUSTED_ORIGINS`
@@ -117,7 +121,7 @@ The child process receives derived overrides for:
 
 The derived public application URL is `https://<CELL_ID>.<ARK_DEV_BASE_URL host>`. Trusted origins include that URL plus `http://localhost:<PORT>` and `http://127.0.0.1:<PORT>`.
 
-When a Cell bucket replaces a base bucket, `ark-dev` clears that location's fixed `STORAGE_<LOCATION>_PUBLIC_URL`. Ark then serves public objects through the Cell application's `/api/ark/files/...` route instead of accidentally resolving them against stage. Direct bucket/CDN URL templates can be added later if a real tenant requires them.
+When a Cell bucket replaces a base bucket, `ark-dev` clears that location's fixed `STORAGE_<LOCATION>_PUBLIC_URL`. Ark then serves public objects through the Cell application's `/api/ark/files/...` route instead of accidentally resolving them against stage. In prefix mode the base public URL remains valid because Ark includes the Cell prefix in every physical object path and public URL while preserving logical paths in the database.
 
 ## Bucket CORS
 
@@ -128,7 +132,7 @@ Every created Cell bucket receives development CORS with:
 - all request headers allowed;
 - `ETag` exposed.
 
-Fixed stage buckets are never changed by `ark-dev`.
+Fixed stage buckets are never changed by `ark-dev`. Prefix mode only verifies that each shared bucket exists and never applies CORS; its CORS policy is an external, one-time infrastructure responsibility.
 
 ## Reset and destruction
 
@@ -139,7 +143,7 @@ pnpm dev --port 3150 --reset
 pnpm exec ark-dev destroy --port 3150
 ```
 
-`--reset` recreates the exact Cell and then starts it. `destroy` removes the exact Cell database, indexes, and buckets without starting the app. Both operations print their fully resolved targets first and refuse any target that does not exactly match `p<PORT>-<ARK_DEV_SLOT>` for a port inside the configured range.
+`--reset` recreates the exact Cell and then starts it. `destroy` removes the exact Cell database, indexes, and storage namespace without starting the app. In prefix mode only objects beneath the exact `<CELL_ID>/` prefix are deleted; the shared bucket and its configuration remain untouched. Both operations print their fully resolved targets first and refuse any target that does not exactly match `p<PORT>-<ARK_DEV_SLOT>` for a port inside the configured range.
 
 Cells have no automatic TTL or pruning. They persist until explicitly reset or destroyed.
 

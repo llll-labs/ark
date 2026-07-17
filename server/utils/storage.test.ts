@@ -9,10 +9,13 @@ import test from 'node:test'
 import {
   buildSignedFileUrl,
   deleteStoredObject,
+  normalizeStoragePrefix,
   parseStorageConfig,
+  publicObjectUrl,
   putStoredObject,
   readStoredObject,
   resetStorageConfigForTests,
+  storageObjectPath,
   verifySignedFileUrl,
 } from './storage'
 
@@ -51,6 +54,7 @@ test('parseStorageConfig reads Directus-like S3 locations', () => {
     STORAGE_PRIVATE_ENDPOINT: 'http://localhost:5402',
     STORAGE_PRIVATE_FORCE_PATH_STYLE: 'true',
     STORAGE_PRIVATE_KEY: 'rustfsadmin',
+    STORAGE_PRIVATE_PREFIX: 'p3100-example/',
     STORAGE_PRIVATE_REGION: 'auto',
     STORAGE_PRIVATE_SECRET: 'rustfsadmin',
     STORAGE_PUBLIC_BUCKET: 'ark-files-public',
@@ -66,7 +70,16 @@ test('parseStorageConfig reads Directus-like S3 locations', () => {
   assert.equal(config.locations.private.driver, 's3')
   assert.equal(config.locations.private.bucket, 'ark-files-private')
   assert.equal(config.locations.private.forcePathStyle, true)
+  assert.equal(config.locations.private.prefix, 'p3100-example/')
   assert.equal(config.locations.public.publicUrl, 'https://cdn.example.test/files')
+})
+
+test('storage prefixes are normalized and applied behind the storage interface', () => {
+  assert.equal(normalizeStoragePrefix('cells/p3100-example/'), 'cells/p3100-example/')
+  assert.equal(normalizeStoragePrefix(''), '')
+  assert.equal(storageObjectPath({ prefix: 'p3100-example/' }, 'file-id.zip'), 'p3100-example/file-id.zip')
+  assert.throws(() => normalizeStoragePrefix('../other-cell'), /Invalid storage prefix/)
+  assert.throws(() => storageObjectPath({ prefix: 'p3100-example/' }, '../other-cell/file-id.zip'), /unsafe/)
 })
 
 test('parseStorageConfig reads Directus-like local locations', () => {
@@ -99,6 +112,7 @@ test('local storage writes and reads from the configured root', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ark-storage-'))
   const previousEnv = {
     STORAGE_LOCAL_DRIVER: process.env.STORAGE_LOCAL_DRIVER,
+    STORAGE_LOCAL_PREFIX: process.env.STORAGE_LOCAL_PREFIX,
     STORAGE_LOCAL_ROOT: process.env.STORAGE_LOCAL_ROOT,
     STORAGE_LOCATIONS: process.env.STORAGE_LOCATIONS,
   }
@@ -106,6 +120,7 @@ test('local storage writes and reads from the configured root', async () => {
   process.env.STORAGE_LOCAL_DRIVER = 'local'
   process.env.STORAGE_LOCAL_ROOT = root
   process.env.STORAGE_LOCATIONS = 'local'
+  process.env.STORAGE_LOCAL_PREFIX = 'p5412-local'
   resetStorageConfigForTests()
 
   try {
@@ -129,6 +144,48 @@ test('local storage writes and reads from the configured root', async () => {
         storage: location.name,
       })),
     )
+  }
+  finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value == null)
+        delete process.env[key]
+      else
+        process.env[key] = value
+    }
+    resetStorageConfigForTests()
+  }
+})
+
+test('public object URLs include the physical storage prefix', () => {
+  const previousEnv = {
+    STORAGE_LOCATIONS: process.env.STORAGE_LOCATIONS,
+    STORAGE_PUBLIC_BUCKET: process.env.STORAGE_PUBLIC_BUCKET,
+    STORAGE_PUBLIC_DRIVER: process.env.STORAGE_PUBLIC_DRIVER,
+    STORAGE_PUBLIC_ENDPOINT: process.env.STORAGE_PUBLIC_ENDPOINT,
+    STORAGE_PUBLIC_KEY: process.env.STORAGE_PUBLIC_KEY,
+    STORAGE_PUBLIC_PREFIX: process.env.STORAGE_PUBLIC_PREFIX,
+    STORAGE_PUBLIC_PUBLIC_URL: process.env.STORAGE_PUBLIC_PUBLIC_URL,
+    STORAGE_PUBLIC_SECRET: process.env.STORAGE_PUBLIC_SECRET,
+  }
+
+  Object.assign(process.env, {
+    STORAGE_LOCATIONS: 'public',
+    STORAGE_PUBLIC_BUCKET: 'shared-public',
+    STORAGE_PUBLIC_DRIVER: 's3',
+    STORAGE_PUBLIC_ENDPOINT: 'https://s3.example.test',
+    STORAGE_PUBLIC_KEY: 'key',
+    STORAGE_PUBLIC_PREFIX: 'p3100-example',
+    STORAGE_PUBLIC_PUBLIC_URL: 'https://cdn.example.test/files',
+    STORAGE_PUBLIC_SECRET: 'secret',
+  })
+  resetStorageConfigForTests()
+
+  try {
+    assert.equal(publicObjectUrl({
+      bucket: 'shared-public',
+      path: 'images/cover image.webp',
+      storage: 'public',
+    }), 'https://cdn.example.test/files/p3100-example/images/cover%20image.webp')
   }
   finally {
     for (const [key, value] of Object.entries(previousEnv)) {

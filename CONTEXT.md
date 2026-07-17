@@ -145,12 +145,12 @@ A developer-specific identity allocated separately for each Tenant App and share
 _Avoid_: Port, environment, developer account
 
 **Development Cell**:
-One persistent remote development instance identified by a Development Slot and a local port. It has an isolated database, search indexes, and physical storage buckets.
+One persistent remote development instance identified by a Development Slot and a local port. It has an isolated database, search indexes, and storage namespace. Storage isolation may use dedicated buckets or a Cell-specific object prefix inside shared development buckets.
 _Avoid_: Stage, local cell, preview deployment
 
 **Cell ID**:
 The canonical name of a Development Cell, reused across its remote resources and public development hostname.
-_Avoid_: Database prefix, bucket prefix, tunnel slug
+_Avoid_: Database prefix, storage prefix, tunnel slug
 
 **Bootstrap Data**:
 Required app-owned records that are reconciled idempotently after migrations in every environment.
