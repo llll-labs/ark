@@ -552,7 +552,7 @@ function worktree(args) {
   console.log('')
   console.log('Run:')
   console.log(`  cd ${shellQuote(target)}`)
-  console.log(`  pnpm dev -- --port ${port}`)
+  console.log(`  pnpm dev --port ${port}`)
 }
 
 function db(args, baseEnv = process.env) {
