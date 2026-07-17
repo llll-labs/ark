@@ -79,13 +79,16 @@ const {
 } = useArkShell()
 
 const capabilities = computed(() => (me.value?.capabilities ?? []) as ArkCapabilityLike[])
+const appConfig = useArkAppConfig()
+const channelsModuleEnabled = computed(() => appConfig.value.modules.includes('channels'))
+const spacesModuleEnabled = computed(() => appConfig.value.modules.includes('spaces'))
 const baseNavigation = useArkNavigation(capabilities)
 const hiddenNavigationRouteSet = computed(() => new Set(props.hiddenNavigationRoutes))
 const navigation = computed(() => {
   return baseNavigation.value.filter(item => !hiddenNavigationRouteSet.value.has(item.to))
 })
 const hasCapability = (capability: ArkCapabilityLike) => capabilities.value.includes(capability)
-const hasAppSidebar = computed(() => hasCapability('app.sidebar.access'))
+const hasAppSidebar = computed(() => channelsModuleEnabled.value && hasCapability('app.sidebar.access'))
 const publicChannels = computed(() => channels.value.filter(channel => !['dm', 'forum', 'job_discussion', 'thread'].includes(channel.kind)))
 const directChannels = computed(() => allChannels.value.filter(channel => channel.kind === 'dm'))
 const appPageNavigationItems = computed(() => {
@@ -126,7 +129,7 @@ const switchableSpaces = computed(() => spaces.value.filter(space =>
   && space.kind !== 'admin'
   && !['direct-messages', 'dms', 'system'].includes(space.slug),
 ))
-const showSpaceSwitcher = computed(() => switchableSpaces.value.length > 1)
+const showSpaceSwitcher = computed(() => spacesModuleEnabled.value && switchableSpaces.value.length > 1)
 const switcherSpaces = computed(() => showSpaceSwitcher.value ? [rootSpace.value, ...switchableSpaces.value].filter(Boolean) as ShellSpace[] : [])
 const currentChannelId = computed(() => typeof route.params.channelId === 'string' ? route.params.channelId : null)
 const sidePeople = computed(() => {
@@ -305,7 +308,7 @@ watch(
           </div>
         </div>
 
-        <div class="ark-shell-channels mt-3">
+        <div v-if="channelsModuleEnabled" class="ark-shell-channels mt-3">
           <div class="mb-1 flex items-center justify-between gap-2 px-2">
             <div class="text-xs font-semibold uppercase tracking-wide text-muted">
               {{ $t('shell.channels') }}
@@ -330,7 +333,7 @@ watch(
           </div>
         </div>
 
-        <div v-if="hasCapability('dm.access')" class="ark-shell-direct-messages mt-3">
+        <div v-if="channelsModuleEnabled && hasCapability('dm.access')" class="ark-shell-direct-messages mt-3">
           <div class="mb-1 flex items-center justify-between gap-2 px-2">
             <div class="text-xs font-semibold uppercase tracking-wide text-muted">
               {{ $t('shell.directMessages') }}
