@@ -5,6 +5,7 @@ node_modules
 .ark
 dist
 coverage
+apps/**/.build
 *.log
 .DS_Store
 .env

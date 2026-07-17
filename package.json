@@ -40,13 +40,17 @@
     "./server/utils/telegram-oauth": "./server/utils/telegram-oauth.ts"
   },
   "bin": {
-    "ark": "scripts/ark.mjs"
+    "ark": "scripts/ark.mjs",
+    "ark-dev": "scripts/ark-dev.mjs",
+    "ark-tunnels": "scripts/ark-tunnels.mjs"
   },
   "files": [
     ".env.example",
     "LICENSE",
     "README.md",
     "app",
+    "apps/ark-tunnels-menubar/Package.swift",
+    "apps/ark-tunnels-menubar/Sources",
     "db",
     "docker-compose.yml",
     "drizzle",
@@ -55,6 +59,8 @@
     "modules",
     "nuxt.config.ts",
     "scripts/ark.mjs",
+    "scripts/ark-dev.mjs",
+    "scripts/ark-tunnels.mjs",
     "scripts/ark-boundaries.mjs",
     "scripts/ark-preflight.ts",
     "server/api",

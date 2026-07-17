@@ -129,3 +129,41 @@ _Avoid_: Lifecycle Filter, SQL fragment
 **Deletion Policy**:
 A Resource's explicit choice to disable deletion, hard-delete items, soft-delete through a declared archive field, or delegate deletion to domain behavior.
 _Avoid_: Column-name inference, implicit delete
+
+## Delivery and environments
+
+**Studio**:
+An operational boundary that owns infrastructure, provider credentials, domains, and deployment systems for one or more Tenant Apps.
+_Avoid_: Tenant, application group, naming prefix
+
+**Tenant App**:
+A separately deployed product application that extends Ark and owns its product schema, data lifecycle, integrations, and environment configuration.
+_Avoid_: Studio, Ark instance, space
+
+**Development Slot**:
+A developer-specific identity allocated separately for each Tenant App and shared with the matching Horse backend entry.
+_Avoid_: Port, environment, developer account
+
+**Development Cell**:
+One persistent remote development instance identified by a Development Slot and a local port. It has an isolated database, search indexes, and physical storage buckets.
+_Avoid_: Stage, local cell, preview deployment
+
+**Cell ID**:
+The canonical name of a Development Cell, reused across its remote resources and public development hostname.
+_Avoid_: Database prefix, bucket prefix, tunnel slug
+
+**Bootstrap Data**:
+Required app-owned records that are reconciled idempotently after migrations in every environment.
+_Avoid_: Fixture, production snapshot, one-time seed
+
+**Fixture**:
+Disposable example or test data that is never required for a Tenant App to boot correctly.
+_Avoid_: Bootstrap Data, sanitized production data
+
+**Sanitized Production Snapshot**:
+A deliberately transformed subset of production state that is safe to import into stage for representative testing.
+_Avoid_: Production backup, Fixture, raw dump
+
+**Release PR**:
+A pull request that promotes the tested `dev` branch into `main`, causing the production deployment.
+_Avoid_: Feature PR, direct production commit

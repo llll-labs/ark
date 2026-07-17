@@ -22,7 +22,10 @@ tenant locale/theme/slug baked in (see `CONTRIBUTING.md`).
   overrides the PGlite path, `STORAGE_LOCAL_ROOT` overrides the upload path.
 - The reference `docker-compose.yml` (this dir) is the heavier opt-in profile;
   it is neutral (`ark`-prefixed, env-overridable), shipped for consumers to copy.
-- FRP/dev tunnels are consumer-specific and must stay out of Ark core.
+- Generic development-cell and FRP client orchestration ships as the
+  development-only `ark-dev` and `ark-tunnels` CLIs. Tenant provider
+  credentials, port policy, backend entries, and remote `frps` infrastructure
+  remain consumer-owned and must not leak into the Ark runtime.
 - **Boot guard**: `server/plugins/ark-preflight.ts` validates env at startup via
   `server/utils/preflight.mjs`. Contradictory/partial config (e.g. an s3 storage
   location missing its bucket) aborts boot in *any* mode; production-hardening
