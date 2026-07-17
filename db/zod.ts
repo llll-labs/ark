@@ -161,6 +161,7 @@ export const messageCreateSchema = z.object({
 export const messagesListSchema = z.object({
   channelId: idSchema,
   limit: z.number().int().min(1).max(100).default(50),
+  publicRead: z.boolean().optional(),
 })
 
 export const messageCursorSchema = z.object({
@@ -171,12 +172,14 @@ export const messageCursorSchema = z.object({
 export const messagesLatestSchema = z.object({
   channelId: idSchema,
   limit: z.number().int().min(1).max(100).default(50),
+  publicRead: z.boolean().optional(),
 })
 
 export const messagesBeforeSchema = z.object({
   channelId: idSchema,
   cursor: messageCursorSchema,
   limit: z.number().int().min(1).max(100).default(50),
+  publicRead: z.boolean().optional(),
 })
 
 export const messagesAfterSchema = messagesBeforeSchema
@@ -186,12 +189,14 @@ export const messagesAroundSchema = z.object({
   messageId: idSchema,
   before: z.number().int().min(0).max(100).default(50),
   after: z.number().int().min(0).max(100).default(50),
+  publicRead: z.boolean().optional(),
 })
 
 export const messagesPinnedSchema = z.object({
   channelId: idSchema,
   cursor: messageCursorSchema.optional(),
   limit: z.number().int().min(1).max(100).default(20),
+  publicRead: z.boolean().optional(),
 })
 
 export const pageCreateSchema = z.object({

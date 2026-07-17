@@ -242,7 +242,24 @@ export function messagePreview(message: Pick<MessageRow, 'body' | 'bodyJson'>) {
   return 'Message'
 }
 
-export async function withMessageDetails(db: any, items: MessageRow[], arkUserId?: string) {
+function publicMessageBodyJson(value: unknown, attachmentFileIds: string[]) {
+  const bodyJson = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  return {
+    ...(attachmentFileIds.length ? { attachmentFileIds } : {}),
+    ...(bodyJson.publicForum === true ? { publicForum: true } : {}),
+    ...(bodyJson.render === false ? { render: false } : {}),
+    ...(bodyJson.richTextJson ? { richTextJson: bodyJson.richTextJson } : {}),
+  }
+}
+
+export async function withMessageDetails(
+  db: any,
+  items: MessageRow[],
+  arkUserId?: string,
+  options: { publicRead?: boolean } = {},
+) {
   const messageIds = items.map(item => item.id)
   const ids = [...new Set(items.flatMap(attachmentFileIdsFromMessage))]
   const authorIds = [...new Set(items.map(item => item.authorArkUserId).filter((id): id is string => Boolean(id)))]
@@ -257,6 +274,7 @@ export async function withMessageDetails(db: any, items: MessageRow[], arkUserId
     ? await db.select().from(arkChannels).where(and(
         inArray(arkChannels.threadRootMessageId, messageIds),
         isNull(arkChannels.deletedAt),
+        options.publicRead ? eq(arkChannels.visibility, 'public') : undefined,
       ))
     : []
   const childRelationRows = messageIds.length
@@ -272,6 +290,7 @@ export async function withMessageDetails(db: any, items: MessageRow[], arkUserId
     ? await db.select().from(arkFiles).where(and(
         inArray(arkFiles.id, ids),
         isNull(arkFiles.deletedAt),
+        options.publicRead ? eq(arkFiles.accessMode, 'public') : undefined,
       ))
     : []
   const authorRows = authorIds.length
@@ -314,7 +333,22 @@ export async function withMessageDetails(db: any, items: MessageRow[], arkUserId
 
   return items.map(item => ({
     ...item,
-    attachments: attachmentFileIdsFromMessage(item).map(id => byId.get(id)).filter((file): file is FileRow => Boolean(file)),
+    bodyJson: options.publicRead
+      ? publicMessageBodyJson(item.bodyJson, attachmentFileIdsFromMessage(item).filter(id => byId.has(id)))
+      : item.bodyJson,
+    attachments: attachmentFileIdsFromMessage(item)
+      .map(id => byId.get(id))
+      .filter((file): file is FileRow => Boolean(file))
+      .map(file => options.publicRead
+        ? {
+            filename: file.filename,
+            height: file.height,
+            id: file.id,
+            mimeType: file.mimeType,
+            sizeBytes: file.sizeBytes,
+            width: file.width,
+          }
+        : file),
     author: item.authorArkUserId ? authorById.get(item.authorArkUserId) ?? null : null,
     forumChildCount: forumChildCounts.get(item.id) ?? 0,
     forumParentId: relationsByMessageId.get(item.id)?.find(relation => relation.relationType === 'forum_parent' && relation.targetType === 'message')?.targetId ?? null,
@@ -346,10 +380,10 @@ export async function withMessageDetails(db: any, items: MessageRow[], arkUserId
   }))
 }
 
-export async function messageWindow(db: any, items: MessageRow[], input: { anchorMessageId?: string, arkUserId?: string, next: boolean, previous: boolean }) {
+export async function messageWindow(db: any, items: MessageRow[], input: { anchorMessageId?: string, arkUserId?: string, next: boolean, previous: boolean, publicRead?: boolean }) {
   return {
     anchorMessageId: input.anchorMessageId,
-    items: await withMessageDetails(db, items, input.arkUserId),
+    items: await withMessageDetails(db, items, input.arkUserId, { publicRead: input.publicRead }),
     nextCursor: input.next && items.length ? messageCursor(items[items.length - 1]!) : null,
     prevCursor: input.previous && items.length ? messageCursor(items[0]!) : null,
   }
@@ -603,8 +637,41 @@ export async function replaceJobTargets(ctx: { db: any }, jobId: string, input: 
   }
 }
 
-export async function getChannelForAccess(channelId: string, sessionOrCtx: any, capability: ArkCapabilityLike) {
+export async function getChannelForAccess(
+  channelId: string,
+  sessionOrCtx: any,
+  capability: ArkCapabilityLike,
+  options: { publicRead?: boolean } = {},
+) {
   const requestAuth = resolveRequestAuth(sessionOrCtx)
+  if (options.publicRead) {
+    if (!['channels.read', 'messages.read'].includes(capability)) {
+      throw new ArkActionError({
+        code: 'FORBIDDEN',
+        message: 'Public forum access is read-only',
+      })
+    }
+    const [channel] = await sessionOrCtx.db.select().from(arkChannels).where(and(
+      eq(arkChannels.id, channelId),
+      isNull(arkChannels.deletedAt),
+    )).limit(1)
+    if (!channel) {
+      throw new ArkActionError({
+        code: 'NOT_FOUND',
+        message: 'Channel not found',
+      })
+    }
+    if (channel.kind !== 'forum' || channel.visibility !== 'public') {
+      throw new ArkActionError({
+        code: 'FORBIDDEN',
+        message: 'Public forum access denied',
+      })
+    }
+    const access = requestAuth
+      ? await requestAuth.capabilitiesFor(channel.spaceId)
+      : await getEffectiveCapabilities(channel.spaceId, resolveSession(sessionOrCtx))
+    return { access, channel }
+  }
   const access = requestAuth
     ? await requestAuth.canReadChannel(channelId)
     : await canReadChannel(channelId, resolveSession(sessionOrCtx))

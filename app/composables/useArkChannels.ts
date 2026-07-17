@@ -54,13 +54,14 @@ function deDupeMessages(items: any[]) {
   return result
 }
 
-export function useArkChannelQuery(channelId: MaybeRefOrGetter<string>) {
+export function useArkChannelQuery(channelId: MaybeRefOrGetter<string>, publicRead: MaybeRefOrGetter<boolean> = false) {
   const { $arkApi } = useNuxtApp()
   const resolvedChannelId = computed(() => toValue(channelId))
+  const resolvedPublicRead = computed(() => toValue(publicRead))
 
   return useQuery({
     enabled: computed(() => resolvedChannelId.value.length > 0),
-    queryFn: () => $arkApi.query("channels.byId", { id: resolvedChannelId.value }),
+    queryFn: () => $arkApi.query("channels.byId", { id: resolvedChannelId.value, publicRead: resolvedPublicRead.value }),
     queryKey: computed(() => arkChannelQueryKeys.detail(resolvedChannelId.value)),
   })
 }
@@ -69,11 +70,13 @@ export function useArkMessageWindowQuery(
   channelId: MaybeRefOrGetter<string>,
   anchor: MaybeRefOrGetter<ArkMessageAnchor>,
   limit: MaybeRefOrGetter<number> = 50,
+  publicRead: MaybeRefOrGetter<boolean> = false,
 ) {
   const { $arkApi } = useNuxtApp()
   const resolvedChannelId = computed(() => toValue(channelId))
   const resolvedAnchor = computed(() => toValue(anchor))
   const resolvedLimit = computed(() => toValue(limit))
+  const resolvedPublicRead = computed(() => toValue(publicRead))
 
   const query = useInfiniteQuery<any, Error, any, any, ArkMessagePageParam>({
     enabled: computed(() => resolvedChannelId.value.length > 0),
@@ -94,6 +97,7 @@ export function useArkMessageWindowQuery(
           channelId: resolvedChannelId.value,
           cursor: pageParam.cursor,
           limit: resolvedLimit.value,
+          publicRead: resolvedPublicRead.value,
         })
       }
       if (pageParam.mode === 'after') {
@@ -101,6 +105,7 @@ export function useArkMessageWindowQuery(
           channelId: resolvedChannelId.value,
           cursor: pageParam.cursor,
           limit: resolvedLimit.value,
+          publicRead: resolvedPublicRead.value,
         })
       }
       if (pageParam.mode === 'around') {
@@ -109,6 +114,7 @@ export function useArkMessageWindowQuery(
           before: resolvedLimit.value,
           channelId: resolvedChannelId.value,
           messageId: pageParam.messageId,
+          publicRead: resolvedPublicRead.value,
         })
       }
       const anchorValue = resolvedAnchor.value
@@ -118,11 +124,13 @@ export function useArkMessageWindowQuery(
           before: resolvedLimit.value,
           channelId: resolvedChannelId.value,
           messageId: anchorValue.messageId,
+          publicRead: resolvedPublicRead.value,
         })
       }
       return $arkApi.query("messages.latest", {
         channelId: resolvedChannelId.value,
         limit: resolvedLimit.value,
+        publicRead: resolvedPublicRead.value,
       })
     },
     queryKey: computed(() => arkChannelQueryKeys.messageWindow(resolvedChannelId.value, resolvedAnchor.value)),
@@ -136,26 +144,28 @@ export function useArkMessageWindowQuery(
   }
 }
 
-export function useArkPinnedMessagesQuery(channelId: MaybeRefOrGetter<string>) {
+export function useArkPinnedMessagesQuery(channelId: MaybeRefOrGetter<string>, publicRead: MaybeRefOrGetter<boolean> = false) {
   const { $arkApi } = useNuxtApp()
   const resolvedChannelId = computed(() => toValue(channelId))
+  const resolvedPublicRead = computed(() => toValue(publicRead))
 
   return useQuery({
     enabled: computed(() => resolvedChannelId.value.length > 0),
     queryFn: () => $arkApi.query("messages.pinned", {
       channelId: resolvedChannelId.value,
       limit: 20,
+      publicRead: resolvedPublicRead.value,
     }),
     queryKey: computed(() => arkChannelQueryKeys.pinnedMessages(resolvedChannelId.value)),
   })
 }
 
-export function useArkChannelStateQuery(channelId: MaybeRefOrGetter<string>) {
+export function useArkChannelStateQuery(channelId: MaybeRefOrGetter<string>, enabled: MaybeRefOrGetter<boolean> = true) {
   const { $arkApi } = useNuxtApp()
   const resolvedChannelId = computed(() => toValue(channelId))
 
   return useQuery({
-    enabled: computed(() => resolvedChannelId.value.length > 0),
+    enabled: computed(() => resolvedChannelId.value.length > 0 && toValue(enabled)),
     queryFn: () => $arkApi.query("messages.state", { channelId: resolvedChannelId.value }),
     queryKey: computed(() => arkChannelQueryKeys.state(resolvedChannelId.value)),
     staleTime: 0,

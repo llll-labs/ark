@@ -55,6 +55,7 @@ import {
 
 const channelLookupSchema = z.object({
   id: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/),
+  publicRead: z.boolean().optional(),
 })
 const uuidInput = z.uuid()
 
@@ -82,6 +83,9 @@ export const channelsRouter = createArkActionRouter({
         : []
       channelId = channel?.id ?? channelId
     }
+
+    if (input.publicRead)
+      return (await getChannelForAccess(channelId, ctx, 'messages.read', { publicRead: true })).channel
 
     const access = await ctx.auth.canReadChannel(channelId)
     if (!access.channel)
@@ -298,7 +302,7 @@ export const channelsRouter = createArkActionRouter({
 
 export const messagesRouter = createArkActionRouter({
   latest: baseAction.input(messagesLatestSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read', { publicRead: input.publicRead })
     const rows = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.channelId, input.channelId),
       isNull(arkMessages.deletedAt),
@@ -308,10 +312,11 @@ export const messagesRouter = createArkActionRouter({
       arkUserId: access.arkUser?.id,
       next: false,
       previous: rows.length > input.limit,
+      publicRead: input.publicRead,
     })
   }),
   before: baseAction.input(messagesBeforeSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read', { publicRead: input.publicRead })
     const cursorDate = parseCursorDate(input.cursor)
     const rows = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.channelId, input.channelId),
@@ -323,10 +328,11 @@ export const messagesRouter = createArkActionRouter({
       arkUserId: access.arkUser?.id,
       next: items.length > 0,
       previous: rows.length > input.limit,
+      publicRead: input.publicRead,
     })
   }),
   after: baseAction.input(messagesAfterSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read', { publicRead: input.publicRead })
     const cursorDate = parseCursorDate(input.cursor)
     const rows = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.channelId, input.channelId),
@@ -338,10 +344,11 @@ export const messagesRouter = createArkActionRouter({
       arkUserId: access.arkUser?.id,
       next: rows.length > input.limit,
       previous: items.length > 0,
+      publicRead: input.publicRead,
     })
   }),
   around: baseAction.input(messagesAroundSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read', { publicRead: input.publicRead })
     const [target] = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.id, input.messageId),
       eq(arkMessages.channelId, input.channelId),
@@ -375,10 +382,11 @@ export const messagesRouter = createArkActionRouter({
       arkUserId: access.arkUser?.id,
       next: newerRows.length > input.after,
       previous: olderRows.length > input.before,
+      publicRead: input.publicRead,
     })
   }),
   pinned: baseAction.input(messagesPinnedSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read', { publicRead: input.publicRead })
     const cursorDate = input.cursor ? parseCursorDate(input.cursor) : null
     const rows = await ctx.db.select({ message: arkMessages, pin: arkMessagePins }).from(arkMessagePins).innerJoin(
       arkMessages,
@@ -390,7 +398,7 @@ export const messagesRouter = createArkActionRouter({
       cursorDate ? olderPinThan(cursorDate, input.cursor!.id) : undefined,
     )).orderBy(desc(arkMessagePins.createdAt), desc(arkMessagePins.id)).limit(input.limit + 1)
     const pageRows = rows.slice(0, input.limit)
-    const messagesWithAttachments = await withMessageDetails(ctx.db, pageRows.map(row => row.message), access.arkUser?.id)
+    const messagesWithAttachments = await withMessageDetails(ctx.db, pageRows.map(row => row.message), access.arkUser?.id, { publicRead: input.publicRead })
     const messagesById = new Map(messagesWithAttachments.map(message => [message.id, message]))
     return {
       hasMore: rows.length > input.limit,
@@ -407,12 +415,12 @@ export const messagesRouter = createArkActionRouter({
     }
   }),
   list: baseAction.input(messagesListSchema).query(async ({ ctx, input }) => {
-    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read')
+    const { access } = await getChannelForAccess(input.channelId, ctx, 'messages.read', { publicRead: input.publicRead })
     const rows = await ctx.db.select().from(arkMessages).where(and(
       eq(arkMessages.channelId, input.channelId),
       isNull(arkMessages.deletedAt),
     )).orderBy(desc(arkMessages.createdAt)).limit(input.limit)
-    return withMessageDetails(ctx.db, rows, access.arkUser?.id)
+    return withMessageDetails(ctx.db, rows, access.arkUser?.id, { publicRead: input.publicRead })
   }),
   create: arkUserAction.input(messageCreateSchema).mutation(async ({ ctx, input }) => {
     const { access, channel } = await getChannelForAccess(input.channelId, ctx, 'messages.create')

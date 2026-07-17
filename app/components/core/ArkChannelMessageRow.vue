@@ -12,6 +12,7 @@ const props = defineProps<{
   depth: number
   isForum: boolean
   highlighted: boolean
+  interactive?: boolean
   pickerPlacement: 'bottom' | 'toolbar' | null
   threadPending: boolean
   emojiOptions: string[]
@@ -112,7 +113,7 @@ function formatFullTimestamp(value: string | Date | null) {
     :class="highlighted ? 'bg-primary/15 ring-1 ring-primary/35' : ''"
     :style="isForum ? { marginLeft: `${depth * 24}px` } : undefined"
   >
-    <div class="absolute right-2 top-0 z-20 flex -translate-y-1/2 items-center gap-1 rounded-md border border-black/30 bg-elevated p-1 opacity-0 shadow-lg shadow-black/20 transition group-hover:opacity-100">
+    <div v-if="interactive !== false" class="absolute right-2 top-0 z-20 flex -translate-y-1/2 items-center gap-1 rounded-md border border-black/30 bg-elevated p-1 opacity-0 shadow-lg shadow-black/20 transition group-hover:opacity-100">
       <UButton
         v-for="emoji in topReactionOptions"
         :key="emoji"
@@ -238,11 +239,12 @@ function formatFullTimestamp(value: string | Date | null) {
           size="xs"
           :color="reaction.reacted ? 'primary' : 'neutral'"
           :variant="reaction.reacted ? 'soft' : 'subtle'"
+          :disabled="interactive === false"
           @click="emit('selectReaction', reaction.emoji)"
         >
           {{ reactionLabel(reaction.emoji) }}
         </UButton>
-        <div class="relative">
+        <div v-if="interactive !== false" class="relative">
           <UButton
             type="button"
             size="xs"
