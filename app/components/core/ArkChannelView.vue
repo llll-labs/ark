@@ -45,10 +45,14 @@ const props = withDefaults(defineProps<{
   allowThreadPanel?: boolean
   channelId: string
   embedded?: boolean
+  publicRead?: boolean
+  readOnly?: boolean
   showEmbeddedClose?: boolean
 }>(), {
   allowThreadPanel: true,
   embedded: false,
+  publicRead: false,
+  readOnly: false,
   showEmbeddedClose: true,
 })
 
@@ -102,10 +106,10 @@ const quickReactions = ['👍', '❤️', '😂', '👀']
 const emojiOptions = ['👍', '❤️', '😂', '👀', '🔥', '🎉', '🙏', '😮', '😢', '🚀', '✅', '💯']
 const reactionPicker = ref<{ messageId: string, placement: 'bottom' | 'toolbar' } | null>(null)
 
-const channelQuery = useArkChannelQuery(() => props.channelId)
-const channelStateQuery = useArkChannelStateQuery(() => props.channelId)
-const messagesWindow = useArkMessageWindowQuery(() => props.channelId, () => anchor.value, 50)
-const pinnedQuery = useArkPinnedMessagesQuery(() => props.channelId)
+const channelQuery = useArkChannelQuery(() => props.channelId, () => props.publicRead)
+const channelStateQuery = useArkChannelStateQuery(() => props.channelId, () => !props.readOnly)
+const messagesWindow = useArkMessageWindowQuery(() => props.channelId, () => anchor.value, 50, () => props.publicRead)
+const pinnedQuery = useArkPinnedMessagesQuery(() => props.channelId, () => props.publicRead)
 const createMessageMutation = useArkMessageCreateMutation()
 const upsertThreadMutation = useArkThreadUpsertMutation()
 const markReadMutation = useArkMarkReadMutation()
@@ -218,6 +222,8 @@ const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
 const totalVirtualHeight = computed(() => rowVirtualizer.value.getTotalSize())
 
 function flushBookmark(channelId: string, messageId: string) {
+  if (props.readOnly)
+    return
   if (lastBookmarkedMessageId === messageId)
     return
   lastBookmarkedMessageId = messageId
@@ -751,6 +757,7 @@ function removeSelectedFile(file: File) {
                 :thread-pending="upsertThreadMutation.isPending.value"
                 :emoji-options="emojiOptions"
                 :quick-reactions="quickReactions"
+                :interactive="!props.readOnly"
                 @select-reaction="selectReaction(displayMessageAt(virtualRow.index), $event)"
                 @toggle-picker="toggleReactionPicker(displayMessageAt(virtualRow.index).id, $event)"
                 @reply="replyToMessageId = displayMessageAt(virtualRow.index).id"
@@ -768,7 +775,7 @@ function removeSelectedFile(file: File) {
         </div>
       </section>
 
-      <form class="relative z-30 shrink-0 bg-default px-3 pb-4 pt-3" @submit.prevent="sendMessage">
+      <form v-if="!props.readOnly" class="relative z-30 shrink-0 bg-default px-3 pb-4 pt-3" @submit.prevent="sendMessage">
         <div v-if="showJumpToNow" class="pointer-events-none absolute inset-x-0 -top-11 z-50 flex justify-center">
           <UButton type="button" size="sm" color="primary" variant="solid" icon="i-lucide-arrow-down" class="pointer-events-auto font-semibold shadow-lg shadow-black/40" @click="jumpToNow">
             {{ jumpToNowLabel }}
