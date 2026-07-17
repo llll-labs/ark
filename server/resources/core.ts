@@ -1,4 +1,5 @@
 import {
+  arkChannelCategories,
   arkChannels,
   arkFiles,
   arkMarketJobs,
@@ -29,6 +30,7 @@ function actorFieldPolicy(field: string) {
 
 export function registerCoreArkResources() {
   for (const definition of [
+    { name: 'ark.channel_categories', rowPolicy: actorFieldPolicy('spaceId'), table: arkChannelCategories },
     { name: 'ark.channels', rowPolicy: actorFieldPolicy('spaceId'), table: arkChannels },
     {
       name: 'ark.files',

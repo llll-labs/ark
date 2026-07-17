@@ -1,6 +1,7 @@
 import type { ArkResourceAccountability, ArkResourceServices } from '../resources/types'
 import type { arkChannels, arkMessages } from '../../db/schema'
 import {
+  arkChannelCategories,
   arkChannelMembers,
   arkChannels as arkChannelsTable,
   arkMessageRelations,
@@ -36,6 +37,15 @@ export interface ArkConversationChannelInput {
   visibility?: ChannelVisibility
 }
 
+export interface ArkConversationCategoryInput {
+  configJson?: Record<string, unknown>
+  description?: null | string
+  name: string
+  position?: number
+  slug: string
+  spaceId: string
+}
+
 export interface ArkConversationMessageInput {
   authorArkUserId?: null | string
   body?: null | string
@@ -49,6 +59,7 @@ export interface ArkConversationMessageInput {
 export interface ArkConversationService {
   createChannel: (input: ArkConversationChannelInput) => Promise<ChannelRow>
   createMessage: (input: ArkConversationMessageInput) => Promise<MessageRow>
+  ensureCategory: (input: ArkConversationCategoryInput) => Promise<typeof arkChannelCategories.$inferSelect>
   ensureMembers: (channelId: string, arkUserIds: string[]) => Promise<void>
   touchChannel: (input: { channelId: string, preview?: null | string }) => Promise<ChannelRow>
 }
@@ -103,6 +114,37 @@ function conversationImplementation(options: ConversationImplementationOptions):
     }) as ChannelRow
     await ensureMembers(channel.id, input.memberArkUserIds ?? [])
     return channel
+  }
+
+  async function ensureCategory(input: ArkConversationCategoryInput) {
+    const [existing] = await database.select().from(arkChannelCategories).where(and(
+      eq(arkChannelCategories.spaceId, input.spaceId),
+      eq(arkChannelCategories.slug, input.slug),
+      isNull(arkChannelCategories.deletedAt),
+    )).limit(1)
+    if (existing)
+      return existing
+
+    try {
+      return await services.resource('ark.channel_categories').create({
+        configJson: input.configJson ?? {},
+        description: input.description,
+        name: input.name,
+        position: input.position ?? 0,
+        slug: input.slug,
+        spaceId: input.spaceId,
+      }) as typeof arkChannelCategories.$inferSelect
+    }
+    catch (error) {
+      const [raceWinner] = await database.select().from(arkChannelCategories).where(and(
+        eq(arkChannelCategories.spaceId, input.spaceId),
+        eq(arkChannelCategories.slug, input.slug),
+        isNull(arkChannelCategories.deletedAt),
+      )).limit(1)
+      if (!raceWinner)
+        throw error
+      return raceWinner
+    }
   }
 
   async function createMessage(input: ArkConversationMessageInput) {
@@ -167,12 +209,12 @@ function conversationImplementation(options: ConversationImplementationOptions):
     return updated
   }
 
-  return { createChannel, createMessage, ensureMembers, touchChannel }
+  return { createChannel, createMessage, ensureCategory, ensureMembers, touchChannel }
 }
 
 export async function withArkConversationTransaction<T>(
   options: { accountability: ArkResourceAccountability, database: any },
-  handler: (context: { conversations: ArkConversationService, database: any }) => Promise<T>,
+  handler: (context: { conversations: ArkConversationService, database: any, services: ArkResourceServices }) => Promise<T>,
 ) {
   registerCoreArkResources()
   const changedChannels = new Set<string>()
@@ -183,6 +225,7 @@ export async function withArkConversationTransaction<T>(
   }, async ({ database, services }) => handler({
     conversations: conversationImplementation({ changedChannels, database, services }),
     database,
+    services,
   }))
   for (const channelId of changedChannels)
     publishChatEvent({ channelId, reason: 'created', type: 'messages:changed' })
@@ -193,6 +236,7 @@ export function createArkConversationService(options: { accountability: ArkResou
   return {
     createChannel: input => withArkConversationTransaction(options, ({ conversations }) => conversations.createChannel(input)),
     createMessage: input => withArkConversationTransaction(options, ({ conversations }) => conversations.createMessage(input)),
+    ensureCategory: input => withArkConversationTransaction(options, ({ conversations }) => conversations.ensureCategory(input)),
     ensureMembers: (channelId, arkUserIds) => withArkConversationTransaction(options, ({ conversations }) => conversations.ensureMembers(channelId, arkUserIds)),
     touchChannel: input => withArkConversationTransaction(options, ({ conversations }) => conversations.touchChannel(input)),
   }
