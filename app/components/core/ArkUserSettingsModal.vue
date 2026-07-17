@@ -1,7 +1,23 @@
 <script setup lang="ts">
 import ArkUserSettingsPanel from './ArkUserSettingsPanel.vue'
 
+interface ArkUserSettingsSection {
+  icon: string
+  id: string
+  label: string
+}
+
+const props = withDefaults(defineProps<{
+  extraSections?: ArkUserSettingsSection[]
+  hiddenSections?: string[]
+}>(), {
+  extraSections: () => [],
+  hiddenSections: () => [],
+})
+
 const open = defineModel<boolean>('open', { default: false })
+const slots = useSlots()
+const forwardedSlotNames = computed(() => Object.keys(slots).filter(name => name.startsWith('section-')))
 
 const maximized = ref(false)
 const { isNarrowWindow } = useArkResponsiveFullscreen()
@@ -29,6 +45,8 @@ const modalUi = computed(() => ({
   >
     <template #body>
       <ArkUserSettingsPanel
+        :extra-sections="props.extraSections"
+        :hidden-sections="props.hiddenSections"
         :is-narrow-window="isNarrowWindow"
         :maximized="maximized"
         show-close
@@ -36,7 +54,11 @@ const modalUi = computed(() => ({
         show-open-page
         @close="open = false"
         @toggle-maximized="maximized = !maximized"
-      />
+      >
+        <template v-for="name in forwardedSlotNames" #[name]="slotProps">
+          <slot :name="name" v-bind="slotProps || {}" />
+        </template>
+      </ArkUserSettingsPanel>
     </template>
   </UModal>
 </template>

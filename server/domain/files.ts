@@ -56,8 +56,14 @@ export function createArkFileService(options: { accountability: ArkResourceAccou
         const currentMetadata = file.metadataJson && typeof file.metadataJson === 'object' && !Array.isArray(file.metadataJson)
           ? file.metadataJson
           : {}
+        const currentNamespace = input.metadataNamespace
+          && currentMetadata[input.metadataNamespace]
+          && typeof currentMetadata[input.metadataNamespace] === 'object'
+          && !Array.isArray(currentMetadata[input.metadataNamespace])
+          ? currentMetadata[input.metadataNamespace] as Record<string, unknown>
+          : {}
         const metadataJson = input.metadataNamespace
-          ? { ...currentMetadata, [input.metadataNamespace]: input.metadata ?? {} }
+          ? { ...currentMetadata, [input.metadataNamespace]: { ...currentNamespace, ...input.metadata } }
           : input.metadata ? { ...currentMetadata, ...input.metadata } : currentMetadata
         return services.resource('ark.files').update(input.fileId, {
           metadataJson,

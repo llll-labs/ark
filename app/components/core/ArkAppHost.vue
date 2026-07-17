@@ -6,18 +6,28 @@ interface AppSettingsSection {
   slot?: string
 }
 
+interface UserSettingsSection {
+  icon: string
+  id: string
+  label: string
+}
+
 const props = withDefaults(defineProps<{
   appSettingsSections?: AppSettingsSection[]
   loginPath?: string
   logoTo?: string
   pageNavigationRoute?: string
   rootSpaceRoute?: string
+  userSettingsExtraSections?: UserSettingsSection[]
+  userSettingsHiddenSections?: string[]
 }>(), {
   appSettingsSections: () => [],
   loginPath: '/login',
   logoTo: '',
   pageNavigationRoute: '/app',
   rootSpaceRoute: '/app',
+  userSettingsExtraSections: () => [],
+  userSettingsHiddenSections: () => [],
 })
 
 const route = useRoute()
@@ -40,6 +50,8 @@ if (!me?.authenticated) {
     :logo-to="props.logoTo"
     :page-navigation-route="props.pageNavigationRoute"
     :root-space-route="props.rootSpaceRoute"
+    :user-settings-extra-sections="props.userSettingsExtraSections"
+    :user-settings-hidden-sections="props.userSettingsHiddenSections"
   >
     <template v-for="name in forwardedSlotNames" #[name]="slotProps">
       <slot :name="name" v-bind="slotProps || {}" />
