@@ -1,4 +1,5 @@
 import { publishedAtForCuration } from '../../../utils/market-jobs'
+import { createArkMarketService } from '../../../domain/market'
 import { withArkResourceTransaction } from '../../../resources/service'
 import {
   and,
@@ -33,7 +34,6 @@ import {
   protectedAction,
   publicMarketJob,
   replaceJobTargets,
-  replaceStoreTargets,
   requireSpaceAccess,
   requireStoreManage,
   requireStoreOwnerInput,
@@ -110,57 +110,16 @@ export const marketRouter = createArkActionRouter({
       if (existing)
         await requireStoreManage(ctx, existing)
 
-      const values = {
-        availability: input.availability ?? null,
-        bio: input.bio ?? null,
-        headline: input.headline ?? null,
-        location: input.location ?? null,
-        metaJson: input.metaJson,
-        name: input.name,
-        ownerSpaceId: owner.ownerSpaceId,
-        portfolioUrl: input.portfolioUrl ?? null,
-        rateAmount: input.rateAmount ?? null,
-        rateCurrency: input.rateCurrency ?? null,
-        rateUnit: input.rateUnit ?? null,
-        remote: input.remote,
-        serviceSummary: input.serviceSummary ?? null,
-        submittedAt: input.status === 'pending_review' ? existing?.submittedAt ?? new Date() : existing?.submittedAt ?? null,
-        status: input.status,
-        timezone: input.timezone ?? null,
-        verificationJson: input.verificationJson,
-        updatedAt: new Date(),
-      }
       const accountability = arkActionResourceAccountability(ctx, {
           arkUserId: owner.arkUser.id,
           capabilities: access.capabilities,
           spaceId: owner.ownerSpaceId,
         })
-      const saveStore = (current: typeof arkMarketStores.$inferSelect | undefined) => withArkResourceTransaction({
-          accountability,
-          authorization: 'domain',
-          database: ctx.db,
-        }, async ({ database, services }) => {
-          const saved = current
-          ? await services.resource('ark.market_stores').update(current.id, values)
-          : await services.resource('ark.market_stores').create(values)
-          await replaceStoreTargets({ db: database }, saved.id as string, input)
-          return saved as typeof arkMarketStores.$inferSelect
-        })
-      let store: typeof arkMarketStores.$inferSelect
-      try {
-        store = await saveStore(existing)
-      }
-      catch (error) {
-        if (existing)
-          throw error
-        const [raceWinner] = await ctx.db.select().from(arkMarketStores).where(and(
-          eq(arkMarketStores.ownerSpaceId, owner.ownerSpaceId),
-          isNull(arkMarketStores.deletedAt),
-        )).limit(1)
-        if (!raceWinner)
-          throw error
-        store = await saveStore(raceWinner)
-      }
+      const store = await createArkMarketService({ accountability, database: ctx.db }).upsertStore({
+        ...input,
+        id: existing?.id,
+        ownerSpaceId: owner.ownerSpaceId,
+      })
       return (await withStoreDetails(ctx, [store]))[0]
     }),
     review: arkUserAction.input(z.object({

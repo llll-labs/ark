@@ -514,31 +514,6 @@ export async function requireStoreOwnerInput(ctx: AuthCapableContext, input: { o
   return { ownerSpaceId: input.ownerSpaceId, arkUser }
 }
 
-export async function replaceStoreTargets(ctx: { db: any }, storeId: string, input: {
-  categoryIds: string[]
-  skillIds: string[]
-  styleIds: string[]
-  tagIds: string[]
-  toolIds: string[]
-}) {
-  const sets = [
-    [marketStoreCategories, input.categoryIds],
-    [marketStoreSkills, input.skillIds],
-    [marketStoreTools, input.toolIds],
-    [marketStoreStyles, input.styleIds],
-    [marketStoreTags, input.tagIds],
-  ] as const
-  for (const [table, ids] of sets) {
-    await ctx.db.delete(table).where(eq(table.storeId, storeId))
-    if (ids.length) {
-      await ctx.db.insert(table).values(ids.map(targetId => ({
-        storeId,
-        targetId,
-      }))).onConflictDoNothing()
-    }
-  }
-}
-
 export async function withStoreDetails(ctx: { db: any }, rows: MarketStoreRow[]) {
   if (!rows.length)
     return []
