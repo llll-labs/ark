@@ -147,7 +147,7 @@ async function updateOnboardingProfileJson(input: {
       onboarding_pending_review: Boolean(input.reviewPending),
     },
   })
-  await auth.check(true)
+  await auth.refresh()
 }
 
 async function save() {

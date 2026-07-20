@@ -61,7 +61,7 @@ function closePortal() {
 }
 
 onMounted(async () => {
-  const me = auth.checked.value ? auth.me.value : await auth.check().catch(() => null)
+  const me = await auth.ready().catch(() => null)
   if (me?.authenticated)
     roles.value = await $arkApi.query("roles.list", {}).catch(() => [])
   checkedAuth.value = true

@@ -55,7 +55,7 @@ export function useArkAuth() {
         method: 'POST',
       })
       await completeAuthProfile()
-      return await runtime.check(true)
+      return await runtime.refresh()
     }
     catch (cause) {
       error.value = arkApiErrorMessage(cause, 'Login failed')
@@ -152,7 +152,7 @@ export function useArkAuth() {
         method: 'POST',
       })
       await completeAuthProfile()
-      return await runtime.check(true)
+      return await runtime.refresh()
     }
     catch (cause) {
       error.value = arkApiErrorMessage(cause, 'Verification failed')
@@ -169,7 +169,7 @@ export function useArkAuth() {
         method: 'POST',
       })
       await completeAuthProfile()
-      return await runtime.check(true)
+      return await runtime.refresh()
     }
     catch (cause) {
       error.value = arkApiErrorMessage(cause, 'Telegram login failed')
@@ -210,7 +210,7 @@ export function useArkAuth() {
     error.value = null
     try {
       await completeAuthProfile()
-      return await runtime.check(true)
+      return await runtime.refresh()
     }
     catch (cause) {
       error.value = arkApiErrorMessage(cause, 'Profile completion failed')
@@ -253,7 +253,6 @@ export function useArkAuth() {
 
   return {
     authenticated,
-    check: runtime.check,
     checked,
     checking,
     completeProfile,
@@ -267,6 +266,8 @@ export function useArkAuth() {
     profile,
     register,
     requestPasswordReset,
+    ready: runtime.ready,
+    refresh: runtime.refresh,
     resendEmailVerificationOtp,
     resetPassword,
     user,

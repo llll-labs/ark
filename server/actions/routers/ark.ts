@@ -8,12 +8,11 @@ import {
   baseAction,
   createArkActionRouter,
   defaultArkIdentity,
-  eq,
   loadArkUserExtension,
-  arkMemberships,
 } from './ark/shared'
 import { membersRouter, permissionsRouter, rolesRouter, spacesRouter } from './ark/spaces'
 import { usersRouter } from './ark/users'
+import { loadArkMeAccess } from '../../utils/ark-me'
 
 export const arkRouter = createArkActionRouter({
   me: baseAction.query(async ({ ctx }) => {
@@ -31,22 +30,16 @@ export const arkRouter = createArkActionRouter({
     }
 
     const ark = defaultArkIdentity()
-    const [arkUser, root] = await Promise.all([
-      ctx.auth.arkUser(),
-      ctx.auth.publicSpace(),
-    ])
-    const capabilityAccess = root ? await ctx.auth.capabilitiesFor(root.id) : { capabilities: [] as string[] }
-    const rows = arkUser
-      ? await ctx.db.select().from(arkMemberships).where(eq(arkMemberships.arkUserId, arkUser.id))
-      : []
+    const access = await loadArkMeAccess(ctx.session.user.id, ctx.db)
+    const arkUser = access.arkUser
 
     return {
       ark,
       arkUser,
       arkUserExtension: arkUser ? await loadArkUserExtension({ arkUserId: arkUser.id, db: ctx.db }) : null,
       authenticated: true,
-      capabilities: capabilityAccess.capabilities,
-      memberships: rows,
+      capabilities: access.capabilities,
+      memberships: access.memberships,
       session: ctx.session.session,
       user: ctx.session.user,
     }

@@ -20,7 +20,8 @@ async function postAuthTarget(me: any, target?: string) {
 }
 
 async function finishAuthenticated(target?: string) {
-  let me = await auth.check(true)
+  await auth.ready()
+  let me = auth.me.value
   if (me?.authenticated && !me.arkUser)
     me = await auth.completeProfile().catch(() => me)
   if (me?.authenticated && me.arkUser)

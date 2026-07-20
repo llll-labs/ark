@@ -5,7 +5,8 @@ definePageMeta({
 
 const auth = useArkAuth()
 const appConfig = useArkAppConfig()
-let me = auth.checked.value ? auth.me.value : await auth.check()
+await auth.ready()
+let me = auth.me.value
 if (me?.authenticated && !me.arkUser)
   me = await auth.completeProfile().catch(() => me)
 

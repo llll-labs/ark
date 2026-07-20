@@ -5,8 +5,7 @@ const props = defineProps<{
 }>()
 
 const auth = useArkAuth()
-if (!auth.checked.value)
-  await auth.check()
+await auth.ready()
 const readOnly = computed(() => props.publicRead && !auth.authenticated.value)
 </script>
 

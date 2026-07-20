@@ -34,17 +34,15 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
   const telegramOAuthStatus = shallowRef<ArkOAuthStatus>({ configured: false })
   const discordOAuthStatus = shallowRef<ArkOAuthStatus>({ configured: false })
 
-  let checkPromise: Promise<ArkMeState | null> | null = null
+  let requestPromise: Promise<ArkMeState | null> | null = null
+  let initializationPromise: Promise<ArkMeState | null> | null = null
   let authUiPromise: Promise<void> | null = null
 
   const authenticated = computed(() => Boolean(me.value?.authenticated))
 
-  async function check(force = false) {
-    if (checked.value && !force)
-      return me.value
-    if (!force && checkPromise)
-      return checkPromise
-
+  function requestMe() {
+    if (requestPromise)
+      return requestPromise
     const nuxtApp = useNuxtApp()
     const run = async () => {
       checking.value = true
@@ -66,10 +64,27 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
       }
     }
 
-    checkPromise = run().finally(() => {
-      checkPromise = null
+    requestPromise = run().finally(() => {
+      requestPromise = null
     })
-    return checkPromise
+    return requestPromise
+  }
+
+  function initialize() {
+    initializationPromise ??= checked.value
+      ? Promise.resolve(me.value)
+      : requestMe()
+    return initializationPromise
+  }
+
+  function ready() {
+    return initializationPromise ?? Promise.resolve(me.value)
+  }
+
+  async function refresh() {
+    if (requestPromise)
+      await requestPromise
+    return requestMe()
   }
 
   async function loadAuthUi(force = false) {
@@ -103,13 +118,6 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
     return authUiPromise
   }
 
-  async function preload() {
-    await Promise.allSettled([
-      check(),
-      loadAuthUi(),
-    ])
-  }
-
   function resetSession() {
     me.value = null
     checked.value = false
@@ -119,15 +127,16 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
     authUiLoaded,
     authUiLoading,
     authenticated,
-    check,
     checked,
     checking,
     discordOAuthStatus,
     error,
+    initialize,
     loadAuthUi,
     me,
-    preload,
     publicSettings,
+    ready,
+    refresh,
     resetSession,
     telegramOAuthStatus,
   }

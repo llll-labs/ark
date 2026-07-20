@@ -23,10 +23,6 @@ const loginTarget = computed(() => ({
   query: route.fullPath === props.loginTo ? {} : { redirect: route.fullPath },
 }))
 
-onMounted(() => {
-  if (!auth.checked.value)
-    void auth.check().catch(() => null)
-})
 </script>
 
 <template>

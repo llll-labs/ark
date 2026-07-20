@@ -123,7 +123,8 @@ export async function runTelegramMiniAuthGuard(to: any) {
 
   try {
     const auth = useArkAuth()
-    const me = await auth.check()
+    await auth.ready()
+    const me = auth.me.value
     if (me?.authenticated)
       return
 
@@ -151,9 +152,10 @@ export async function runArkAuthGuard(to: any) {
 
   const nuxtApp = useNuxtApp()
   const auth = useArkAuth()
+  await auth.ready()
 
   if (to.path === '/login') {
-    const me = await completeArkProfileIfNeeded(auth, await auth.check())
+    const me = await completeArkProfileIfNeeded(auth, auth.me.value)
     if (me?.authenticated && hasArkUser(me))
       return redirectWithContext(nuxtApp, telegramMiniPostAuthTarget('/login', to.query.redirect))
     return
@@ -162,7 +164,7 @@ export async function runArkAuthGuard(to: any) {
   if (isPublicArkRoute(to.path))
     return
 
-  const me = await completeArkProfileIfNeeded(auth, await auth.check())
+  const me = await completeArkProfileIfNeeded(auth, auth.me.value)
   if (!me?.authenticated) {
     return redirectWithContext(nuxtApp, {
       path: '/login',
@@ -186,7 +188,8 @@ export async function runArkOnboardingGuard(to: any) {
 
   const nuxtApp = useNuxtApp()
   const auth = useArkAuth()
-  const me = await completeArkProfileIfNeeded(auth, auth.checked.value ? auth.me.value : await auth.check())
+  await auth.ready()
+  const me = await completeArkProfileIfNeeded(auth, auth.me.value)
   if (!me?.authenticated)
     return
   if (!hasArkUser(me))
