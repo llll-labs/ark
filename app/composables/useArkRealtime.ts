@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/vue-query'
 import { useWebSocket } from '@vueuse/core'
 import { computed, toValue } from 'vue'
 import { arkChannelQueryKeys, invalidateArkChannelMessages } from './useArkChannels'
+import { invalidateArkShell } from './useArkShell'
 
 interface ArkRealtimeMessage {
   channelId?: string
@@ -50,6 +51,7 @@ export function useArkRealtime(channelId: MaybeRefOrGetter<string | null | undef
 
       void invalidateArkChannelMessages(queryClient, message.channelId)
       void queryClient.invalidateQueries({ queryKey: arkChannelQueryKeys.all })
+      void invalidateArkShell(queryClient)
     },
   })
 

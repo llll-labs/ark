@@ -1,6 +1,11 @@
+import type { QueryClient } from '@tanstack/vue-query'
+import { useQuery, useQueryClient } from '@tanstack/vue-query'
+import { arkViewerScope } from '../utils/arkQueryScope'
+
 /**
- * Owns the data behind `ArkShell`. Split into three scoped `useAsyncData`
- * fetches so navigation only refetches what actually changed:
+ * Owns the mutable data behind `ArkShell` in the same Vue Query cache used by
+ * Ark mutations and realtime invalidation. Queries remain split by scope so
+ * navigation only refetches what actually changed:
  *
  * - base   (no route watch): identity + workspace-wide data — spaces, every
  *   space's channels (for DM discovery), roles, users. Fetched once per load.
@@ -11,10 +16,8 @@
  * channel fan-out — on every `route.fullPath` change. Now switching channels
  * only refetches participants, and switching spaces only refetches pages/members.
  *
- * IMPORTANT: all three `useAsyncData` calls are registered synchronously (before
- * any `await`) so the Nuxt instance context is available to each during SSR;
- * awaiting between them would lose it. The space query awaits the base query
- * internally to keep its dependency on the resolved space list.
+ * `ready()` provides the SSR seam: ArkShell awaits active queries, after which
+ * the Nuxt Vue Query plugin dehydrates them into the page payload.
  */
 
 export interface ShellChannel {
@@ -75,32 +78,43 @@ export interface ShellPage {
   title: string
 }
 
+export const arkShellQueryKeys = {
+  all: ['rest', 'ark', 'shell'] as const,
+  base: (viewerScope: string) => [...arkShellQueryKeys.all, 'base', viewerScope] as const,
+  participants: (channelId: string, viewerScope: string) => [...arkShellQueryKeys.all, 'participants', channelId, viewerScope] as const,
+  space: (spaceId: string, viewerScope: string) => [...arkShellQueryKeys.all, 'space', spaceId, viewerScope] as const,
+}
+
+export function invalidateArkShell(queryClient: QueryClient) {
+  return queryClient.invalidateQueries({ queryKey: arkShellQueryKeys.all })
+}
+
 export function useArkShell() {
   const { $arkApi } = useNuxtApp()
+  const queryClient = useQueryClient()
   const route = useRoute()
   const auth = useArkAuth()
+  const viewerScope = computed(() => arkViewerScope(false, auth.user.value?.id))
 
-  // Access is intentionally lazy at the auth layer. The full Ark shell is an
-  // explicit consumer, so it opts in once and shares the result through Pinia.
-  const accessQuery = useAsyncData('ark-shell-access', () => auth.loadAccess())
-  const profileQuery = useAsyncData('ark-shell-profile', () => auth.loadProfile())
-
-  // Base — identity + workspace-wide data. Not watched on navigation.
-  const baseQuery = useAsyncData('ark-shell-base', async () => {
-    const spaces = await $arkApi.query("spaces.list", {}).catch(() => []) as ShellSpace[]
-    const channelsBySpace = await Promise.all(
-      spaces.map(space => $arkApi.query("channels.list", { spaceId: space.id }).catch(() => []) as Promise<ShellChannel[]>),
-    )
-    const [roles, users] = await Promise.all([
-      $arkApi.query("roles.list", {}).catch(() => [] as ShellRole[]),
-      $arkApi.query("users.list", {}).catch(() => [] as ShellUser[]),
-    ]) as [ShellRole[], ShellUser[]]
-    return { allChannels: channelsBySpace.flat(), roles, spaces, users }
+  const baseQuery = useQuery({
+    enabled: computed(() => auth.authenticated.value),
+    queryFn: async () => {
+      const spaces = await $arkApi.query("spaces.list", {}) as ShellSpace[]
+      const channelsBySpace = await Promise.all(
+        spaces.map(space => $arkApi.query("channels.list", { spaceId: space.id }) as Promise<ShellChannel[]>),
+      )
+      const [roles, users] = await Promise.all([
+        $arkApi.query("roles.list", {}) as Promise<ShellRole[]>,
+        $arkApi.query("users.list", {}) as Promise<ShellUser[]>,
+      ])
+      return { allChannels: channelsBySpace.flat(), roles, spaces, users }
+    },
+    queryKey: computed(() => arkShellQueryKeys.base(viewerScope.value)),
   })
 
   const me = computed(() => auth.me.value)
-  const access = computed(() => accessQuery.data.value ?? auth.access.value)
-  const profile = computed(() => profileQuery.data.value?.arkUser ?? auth.profile.value)
+  const access = computed(() => auth.access.value)
+  const profile = computed(() => auth.profile.value)
   const spaces = computed(() => baseQuery.data.value?.spaces ?? [])
   const allChannels = computed(() => baseQuery.data.value?.allChannels ?? [])
   const roles = computed(() => baseQuery.data.value?.roles ?? [])
@@ -113,46 +127,45 @@ export function useArkShell() {
     return spaces.value.find(space => space.id === routeSpaceId) ?? rootSpace.value
   })
   const selectedSpaceId = computed(() => selectedSpace.value?.id ?? '')
-  // Channels for the active space are derived from the base fetch — no extra request.
   const channels = computed(() => allChannels.value.filter(channel => channel.spaceId === selectedSpaceId.value))
 
-  // Space-scoped — pages + members for the active space. Awaits base so the
-  // selected space id is resolved before fetching.
-  const spaceQuery = useAsyncData(
-    'ark-shell-space',
-    async () => {
-      await baseQuery
+  const spaceQuery = useQuery({
+    enabled: computed(() => Boolean(selectedSpaceId.value)),
+    queryFn: async () => {
       const id = selectedSpaceId.value
-      if (!id)
-        return { members: [] as ShellMember[], pages: [] as ShellPage[] }
       const [pages, members] = await Promise.all([
-        $arkApi.query("pages.list", { spaceId: id }).catch(() => [] as ShellPage[]),
-        $arkApi.query("members.list", { spaceId: id }).catch(() => [] as ShellMember[]),
+        $arkApi.query("pages.list", { spaceId: id }) as Promise<ShellPage[]>,
+        $arkApi.query("members.list", { spaceId: id }) as Promise<ShellMember[]>,
       ])
-      return { members: members as ShellMember[], pages: pages as ShellPage[] }
+      return { members, pages }
     },
-    { watch: [selectedSpaceId] },
-  )
+    queryKey: computed(() => arkShellQueryKeys.space(selectedSpaceId.value, viewerScope.value)),
+  })
 
-  // Channel-scoped — participants for the open channel.
-  const routeChannelId = computed(() => typeof route.params.channelId === 'string' ? route.params.channelId : null)
-  const participantsQuery = useAsyncData(
-    'ark-shell-participants',
-    async () => {
-      const id = routeChannelId.value
-      if (!id)
-        return [] as ShellParticipant[]
-      return await $arkApi.query("channels.participants", { id }).catch(() => []) as ShellParticipant[]
-    },
-    { watch: [routeChannelId] },
-  )
+  const routeChannelId = computed(() => typeof route.params.channelId === 'string' ? route.params.channelId : '')
+  const participantsQuery = useQuery({
+    enabled: computed(() => Boolean(routeChannelId.value)),
+    queryFn: () => $arkApi.query("channels.participants", { id: routeChannelId.value }) as Promise<ShellParticipant[]>,
+    queryKey: computed(() => arkShellQueryKeys.participants(routeChannelId.value, viewerScope.value)),
+  })
 
   const pages = computed(() => spaceQuery.data.value?.pages ?? [])
   const members = computed(() => spaceQuery.data.value?.members ?? [])
   const channelParticipants = computed(() => participantsQuery.data.value ?? [])
 
-  async function refresh() {
-    await Promise.all([baseQuery.refresh(), spaceQuery.refresh(), participantsQuery.refresh()])
+  async function ready() {
+    await Promise.all([auth.loadAccess(), auth.loadProfile()])
+    if (!auth.authenticated.value)
+      return
+    await baseQuery.suspense()
+    await Promise.all([
+      selectedSpaceId.value ? spaceQuery.suspense() : Promise.resolve(),
+      routeChannelId.value ? participantsQuery.suspense() : Promise.resolve(),
+    ])
+  }
+
+  function refresh() {
+    return invalidateArkShell(queryClient)
   }
 
   return {
@@ -164,6 +177,7 @@ export function useArkShell() {
     members,
     pages,
     profile,
+    ready,
     refresh,
     roles,
     rootSpace,

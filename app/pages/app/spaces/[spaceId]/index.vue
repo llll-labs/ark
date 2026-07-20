@@ -1,21 +1,31 @@
 <script setup lang="ts">
+import { useQuery } from '@tanstack/vue-query'
+import { arkViewerScope } from '../../../../utils/arkQueryScope'
+
 definePageMeta({
   layout: 'app',
 })
 
 const route = useRoute()
 const { $arkApi } = useNuxtApp()
+const auth = useArkAuth()
 const spaceId = computed(() => String(route.params.spaceId))
+const viewerScope = computed(() => arkViewerScope(false, auth.user.value?.id))
 
-const { data } = await useAsyncData(`ark-space-${spaceId.value}`, async () => {
-  const [space, channels, pages, capabilities] = await Promise.all([
-    $arkApi.query("spaces.byId", { id: spaceId.value }),
-    $arkApi.query("channels.list", { spaceId: spaceId.value }).catch(() => []),
-    $arkApi.query("pages.list", { spaceId: spaceId.value }).catch(() => []),
-    $arkApi.query("spaces.effectiveCapabilities", { spaceId: spaceId.value }),
-  ])
-  return { capabilities, channels, pages, space }
+const spaceQuery = useQuery({
+  queryFn: async () => {
+    const [space, channels, pages, capabilities] = await Promise.all([
+      $arkApi.query("spaces.byId", { id: spaceId.value }),
+      $arkApi.query("channels.list", { spaceId: spaceId.value }),
+      $arkApi.query("pages.list", { spaceId: spaceId.value }),
+      $arkApi.query("spaces.effectiveCapabilities", { spaceId: spaceId.value }),
+    ])
+    return { capabilities, channels, pages, space }
+  },
+  queryKey: computed(() => ['rest', 'ark', 'spaces', 'detail', spaceId.value, viewerScope.value]),
 })
+await spaceQuery.suspense()
+const data = computed(() => spaceQuery.data.value)
 </script>
 
 <template>
