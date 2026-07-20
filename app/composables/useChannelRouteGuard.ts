@@ -9,14 +9,10 @@ export function useChannelRouteGuard(
   channelId: MaybeRefOrGetter<string>,
   options?: { jobRedirect?: (channel: any) => string },
 ) {
-  const { $arkApi } = useNuxtApp()
   const id = computed(() => toValue(channelId))
-  const { data: channel } = useAsyncData(
-    `ark-channel-route-${id.value}`,
-    () => $arkApi.query("channels.byId", { id: id.value }),
-  )
+  const query = useArkChannelQuery(id)
 
-  watch(channel, (value) => {
+  watch(query.data, (value) => {
     if (value?.kind !== 'job_discussion')
       return
 
@@ -24,5 +20,5 @@ export function useChannelRouteGuard(
     void navigateTo(target, { replace: true })
   }, { immediate: true })
 
-  return channel
+  return query.suspense().then(() => query.data)
 }

@@ -72,6 +72,7 @@ const {
   members,
   pages,
   profile,
+  ready,
   refresh,
   roles,
   rootSpace,
@@ -79,6 +80,8 @@ const {
   spaces,
   users,
 } = useArkShell()
+
+await ready()
 
 const capabilities = computed(() => (access.value?.capabilities ?? []) as ArkCapabilityLike[])
 const appConfig = useArkAppConfig()

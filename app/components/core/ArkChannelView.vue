@@ -114,6 +114,14 @@ const createMessageMutation = useArkMessageCreateMutation()
 const upsertThreadMutation = useArkThreadUpsertMutation()
 const markReadMutation = useArkMarkReadMutation()
 
+if (import.meta.server) {
+  await Promise.all([
+    channelQuery.suspense(),
+    messagesWindow.suspense(),
+    pinnedQuery.suspense(),
+  ])
+}
+
 let lastBookmarkChannelId: string | null = null
 let lastBookmarkedMessageId: string | null = null
 
@@ -636,7 +644,7 @@ async function react(messageId: string, emoji: string) {
 async function pin(messageId: string) {
   await runAction(async () => {
     await $arkApi.mutate("messages.pin", { messageId })
-    void queryClient.invalidateQueries({ queryKey: arkChannelQueryKeys.pinnedMessages(props.channelId) })
+    void queryClient.invalidateQueries({ queryKey: arkChannelQueryKeys.pinnedMessagesPrefix(props.channelId) })
   }, { errorFallback: t('channel.pinFailed') })
 }
 

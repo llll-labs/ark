@@ -3,6 +3,8 @@ import ArkChannelView from '../../../components/core/ArkChannelView.vue'
 import ArkJobDiscussionComposer from '../../../components/core/ArkJobDiscussionComposer.vue'
 import { useJobDiscussion } from '../../../composables/useJobDiscussion'
 import { formatBudget, formatDate } from '../../../utils/arkFormat'
+import { useQuery } from '@tanstack/vue-query'
+import { arkViewerScope } from '../../../utils/arkQueryScope'
 
 definePageMeta({
   layout: 'app',
@@ -12,14 +14,20 @@ await useArkCapabilityGate('market.access')
 
 const route = useRoute()
 const { $arkApi } = useNuxtApp()
+const auth = useArkAuth()
 const jobId = computed(() => String(route.params.jobId))
+const viewerScope = computed(() => arkViewerScope(false, auth.user.value?.id))
 
-const { data, refresh } = await useAsyncData(`ark-job-${jobId.value}`, async () => {
-  const job = await $arkApi.query("market.jobs.byId", { id: jobId.value }).catch(() => null)
-  return { job }
+const jobQuery = useQuery({
+  queryFn: () => $arkApi.query("market.jobs.byId", { id: jobId.value }),
+  queryKey: computed(() => ['rest', 'ark', 'market', 'jobs', 'detail', jobId.value, viewerScope.value]),
 })
+await jobQuery.suspense()
 
-const job = computed(() => data.value?.job ?? null)
+const refresh = async () => {
+  await jobQuery.refetch()
+}
+const job = computed(() => jobQuery.data.value ?? null)
 const discussionChannelId = computed(() => job.value?.discussionChannelId ?? '')
 
 const {
