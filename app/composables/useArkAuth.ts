@@ -32,12 +32,28 @@ function absoluteAuthUrl(path: string) {
 
 export function useArkAuth() {
   const runtime = useArkAuthRuntimeStore()
-  const { checked, checking, error, me } = storeToRefs(runtime)
+  const {
+    access,
+    accessError,
+    accessLoaded,
+    accessLoading,
+    checked,
+    checking,
+    error,
+    me,
+    profileError,
+    profileLoaded,
+    profileLoading,
+    profileState,
+  } = storeToRefs(runtime)
   const nuxtApp = useNuxtApp()
 
   const user = computed(() => me.value?.user ?? null)
-  const profile = computed(() => me.value?.arkUser ?? null)
+  const profile = computed(() => profileState.value?.arkUser ?? null)
+  const profileExtension = computed(() => profileState.value?.arkUserExtension ?? null)
   const authenticated = computed(() => runtime.authenticated)
+  const capabilities = computed(() => access.value?.capabilities ?? [])
+  const memberships = computed(() => access.value?.memberships ?? [])
 
   function localeHeaders(): Record<string, string> {
     const locale = (nuxtApp.$i18n as { locale?: string | { value?: string } } | undefined)?.locale
@@ -55,7 +71,7 @@ export function useArkAuth() {
         method: 'POST',
       })
       await completeAuthProfile()
-      return await runtime.check(true)
+      return await runtime.refresh()
     }
     catch (cause) {
       error.value = arkApiErrorMessage(cause, 'Login failed')
@@ -152,7 +168,7 @@ export function useArkAuth() {
         method: 'POST',
       })
       await completeAuthProfile()
-      return await runtime.check(true)
+      return await runtime.refresh()
     }
     catch (cause) {
       error.value = arkApiErrorMessage(cause, 'Verification failed')
@@ -169,7 +185,7 @@ export function useArkAuth() {
         method: 'POST',
       })
       await completeAuthProfile()
-      return await runtime.check(true)
+      return await runtime.refresh()
     }
     catch (cause) {
       error.value = arkApiErrorMessage(cause, 'Telegram login failed')
@@ -210,7 +226,9 @@ export function useArkAuth() {
     error.value = null
     try {
       await completeAuthProfile()
-      return await runtime.check(true)
+      const me = await runtime.refresh()
+      await runtime.loadProfile(true)
+      return me
     }
     catch (cause) {
       error.value = arkApiErrorMessage(cause, 'Profile completion failed')
@@ -252,8 +270,12 @@ export function useArkAuth() {
   }
 
   return {
+    access,
+    accessError,
+    accessLoaded,
+    accessLoading,
     authenticated,
-    check: runtime.check,
+    capabilities,
     checked,
     checking,
     completeProfile,
@@ -262,11 +284,20 @@ export function useArkAuth() {
     loginWithDiscordOAuth,
     loginWithTelegramMini,
     loginWithTelegramOAuth,
+    loadAccess: runtime.loadAccess,
+    loadProfile: runtime.loadProfile,
     logout,
     me,
+    memberships,
     profile,
+    profileError,
+    profileExtension,
+    profileLoaded,
+    profileLoading,
     register,
     requestPasswordReset,
+    ready: runtime.ready,
+    refresh: runtime.refresh,
     resendEmailVerificationOtp,
     resetPassword,
     user,

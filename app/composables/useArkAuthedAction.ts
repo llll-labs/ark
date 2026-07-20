@@ -4,8 +4,12 @@ export function useArkAuthedAction() {
   const pendingAction = shallowRef<null | (() => Promise<void> | void)>(null)
 
   async function runAuthed(action: () => Promise<void> | void) {
-    const me = auth.checked.value ? auth.me.value : await auth.check()
-    if (me?.authenticated && me.arkUser) {
+    await auth.ready()
+    const me = auth.me.value
+    const profile = me?.authenticated
+      ? await auth.loadProfile().catch(() => null)
+      : null
+    if (me?.authenticated && profile?.arkUser) {
       await action()
       return
     }

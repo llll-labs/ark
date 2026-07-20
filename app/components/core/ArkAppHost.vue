@@ -34,7 +34,8 @@ const route = useRoute()
 const auth = useArkAuth()
 const slots = useSlots()
 const forwardedSlotNames = computed(() => Object.keys(slots).filter(name => name !== 'default'))
-const me = auth.checked.value ? auth.me.value : await auth.check()
+await auth.ready()
+const me = auth.me.value
 
 if (!me?.authenticated) {
   await navigateTo({

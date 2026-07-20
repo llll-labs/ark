@@ -4,7 +4,8 @@ const { $arkApi } = useNuxtApp()
 const auth = useArkAuth()
 
 const { data, pending, refresh } = await useAsyncData('ark-onboarding-auth-step', async () => {
-  const me = await auth.check(true)
+  await auth.ready()
+  const me = auth.me.value
   const [settings, userSettings, mine] = await Promise.all([
     $arkApi.query('settings.public').catch(() => null),
     $arkApi.query("users.settings", {}).catch(() => null),
@@ -20,7 +21,7 @@ const onboardingJson = computed<Record<string, any>>(() => {
 const enabled = computed(() => onboardingJson.value.enabled !== false)
 const reviewRequired = computed(() => enabled.value && Boolean(onboardingJson.value.review_required ?? onboardingJson.value.reviewRequired))
 const required = computed(() => enabled.value && Boolean(onboardingJson.value.required ?? onboardingJson.value.onboarding_required ?? reviewRequired.value))
-const profile = computed(() => data.value?.userSettings?.profile ?? data.value?.me?.arkUser ?? auth.me.value?.arkUser ?? null)
+const profile = computed(() => data.value?.userSettings?.profile ?? auth.profile.value ?? null)
 const authenticated = computed(() => Boolean(profile.value))
 const profileJson = computed<Record<string, any>>(() => {
   const value = profile.value?.profileJson
@@ -99,7 +100,7 @@ async function completeOnboarding(input: { completed: boolean, dismissed?: boole
       onboarding_pending_review: false,
     },
   })
-  await auth.check(true)
+  await auth.refresh()
 }
 
 async function chooseIntent(value: Intent) {

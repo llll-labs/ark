@@ -106,7 +106,6 @@ const inputUi = computed(() => ({
 }))
 
 async function finishAuth(target?: string) {
-  await auth.check(true)
   emit('authenticated', target)
 }
 

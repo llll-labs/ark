@@ -9,13 +9,14 @@ export async function useArkOnboarding() {
   const auth = useArkAuth()
   const { $arkApi } = useNuxtApp()
   const { data, pending, refresh } = await useAsyncData('ark-onboarding-profile', async () => {
-    const me = await auth.check(true)
+    await auth.ready()
+    const me = auth.me.value
     const settings = me?.authenticated
       ? await $arkApi.query('users.settings', {}).catch(() => null)
       : null
     return { me, settings }
   })
-  const profile = computed(() => data.value?.settings?.profile ?? data.value?.me?.arkUser ?? null)
+  const profile = computed(() => data.value?.settings?.profile ?? auth.profile.value ?? null)
   const profileJson = computed<Record<string, unknown>>(() => {
     const value = profile.value?.profileJson
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -53,7 +54,7 @@ export async function useArkOnboarding() {
         onboarding_pending_review: false,
       },
     })
-    await auth.check(true)
+    await auth.refresh()
     await refresh()
     return profile.value
   }

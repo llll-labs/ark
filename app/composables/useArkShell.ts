@@ -80,6 +80,11 @@ export function useArkShell() {
   const route = useRoute()
   const auth = useArkAuth()
 
+  // Access is intentionally lazy at the auth layer. The full Ark shell is an
+  // explicit consumer, so it opts in once and shares the result through Pinia.
+  const accessQuery = useAsyncData('ark-shell-access', () => auth.loadAccess())
+  const profileQuery = useAsyncData('ark-shell-profile', () => auth.loadProfile())
+
   // Base — identity + workspace-wide data. Not watched on navigation.
   const baseQuery = useAsyncData('ark-shell-base', async () => {
     const spaces = await $arkApi.query("spaces.list", {}).catch(() => []) as ShellSpace[]
@@ -94,6 +99,8 @@ export function useArkShell() {
   })
 
   const me = computed(() => auth.me.value)
+  const access = computed(() => accessQuery.data.value ?? auth.access.value)
+  const profile = computed(() => profileQuery.data.value?.arkUser ?? auth.profile.value)
   const spaces = computed(() => baseQuery.data.value?.spaces ?? [])
   const allChannels = computed(() => baseQuery.data.value?.allChannels ?? [])
   const roles = computed(() => baseQuery.data.value?.roles ?? [])
@@ -149,12 +156,14 @@ export function useArkShell() {
   }
 
   return {
+    access,
     allChannels,
     channelParticipants,
     channels,
     me,
     members,
     pages,
+    profile,
     refresh,
     roles,
     rootSpace,

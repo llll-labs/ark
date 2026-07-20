@@ -64,12 +64,14 @@ function appSettingsSlotName(section: AppSettingsSection) {
 }
 
 const {
+  access,
   allChannels,
   channelParticipants,
   channels,
   me,
   members,
   pages,
+  profile,
   refresh,
   roles,
   rootSpace,
@@ -78,7 +80,7 @@ const {
   users,
 } = useArkShell()
 
-const capabilities = computed(() => (me.value?.capabilities ?? []) as ArkCapabilityLike[])
+const capabilities = computed(() => (access.value?.capabilities ?? []) as ArkCapabilityLike[])
 const appConfig = useArkAppConfig()
 const channelsModuleEnabled = computed(() => appConfig.value.modules.includes('channels'))
 const spacesModuleEnabled = computed(() => appConfig.value.modules.includes('spaces'))
@@ -152,10 +154,10 @@ const sidePeople = computed(() => {
   }))
 })
 const sidePeopleEmptyLabel = computed(() => currentChannelId.value ? t('shell.noChannelParticipants') : t('shell.noVisibleMembers'))
-const currentName = computed(() => me.value?.arkUser?.displayName || me.value?.user?.name || t('shell.guest'))
+const currentName = computed(() => profile.value?.displayName || me.value?.user?.name || t('shell.guest'))
 const initials = computed(() => nameInitials(currentName.value, 'M'))
 const currentRoles = computed(() => {
-  const roleIds = new Set((me.value?.memberships ?? [])
+  const roleIds = new Set((access.value?.memberships ?? [])
     .map((membership: { roleId?: null | string }) => membership.roleId)
     .filter(Boolean))
   return roles.value.filter((role: ShellRole) => roleIds.has(role.id)).slice(0, 3)
@@ -379,7 +381,7 @@ watch(
           :name="currentName"
           :subtitle="currentRoleLabel"
           :initials="initials"
-          :avatar-src="arkAvatarFileUrl(me?.arkUser?.avatarFileId)"
+          :avatar-src="arkAvatarFileUrl(profile?.avatarFileId)"
           trailing-icon="i-lucide-settings"
           :aria-label="$t('shell.openSettings')"
           @click="userSettingsOpen = true"

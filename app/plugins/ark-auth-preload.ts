@@ -1,8 +1,10 @@
 export default defineNuxtPlugin({
   dependsOn: ['ark-api'],
   name: 'ark-auth-preload',
-  setup() {
+  async setup() {
     const authRuntime = useArkAuthRuntimeStore()
-    void authRuntime.preload()
+    await authRuntime.initialize()
+    if (import.meta.client)
+      void authRuntime.loadAuthUi()
   },
 })
