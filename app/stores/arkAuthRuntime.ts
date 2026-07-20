@@ -5,13 +5,19 @@ import { arkApiErrorMessage } from '../utils/arkApiError'
 
 export interface ArkMeState {
   ark: { id: string, name: string, slug: string }
-  arkUser: null | Record<string, any>
-  arkUserExtension: null | Record<string, any>
   authenticated: boolean
-  capabilities: string[]
-  memberships: Record<string, any>[]
   session: null | Record<string, any>
   user: null | Record<string, any>
+}
+
+export interface ArkProfileState {
+  arkUser: null | Record<string, any>
+  arkUserExtension: null | Record<string, any>
+}
+
+export interface ArkAccessState {
+  capabilities: string[]
+  memberships: Record<string, any>[]
 }
 
 export interface ArkOAuthStatus {
@@ -25,6 +31,14 @@ export interface ArkPublicSettings {
 
 export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
   const me = shallowRef<ArkMeState | null>(null)
+  const access = shallowRef<ArkAccessState | null>(null)
+  const accessLoaded = ref(false)
+  const accessLoading = ref(false)
+  const accessError = ref<string | null>(null)
+  const profileState = shallowRef<ArkProfileState | null>(null)
+  const profileLoaded = ref(false)
+  const profileLoading = ref(false)
+  const profileError = ref<string | null>(null)
   const checked = ref(false)
   const checking = ref(false)
   const error = ref<string | null>(null)
@@ -35,6 +49,8 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
   const discordOAuthStatus = shallowRef<ArkOAuthStatus>({ configured: false })
 
   let requestPromise: Promise<ArkMeState | null> | null = null
+  let accessPromise: Promise<ArkAccessState> | null = null
+  let profilePromise: Promise<ArkProfileState> | null = null
   let initializationPromise: Promise<ArkMeState | null> | null = null
   let authUiPromise: Promise<void> | null = null
 
@@ -78,13 +94,103 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
   }
 
   function ready() {
-    return initializationPromise ?? Promise.resolve(me.value)
+    if (!checked.value)
+      return initialize()
+    return requestPromise ?? Promise.resolve(me.value)
   }
 
   async function refresh() {
     if (requestPromise)
       await requestPromise
+    resetAccess()
+    resetProfile()
     return requestMe()
+  }
+
+  function loadProfile(force = false) {
+    if (profileLoaded.value && !force)
+      return Promise.resolve(profileState.value ?? { arkUser: null, arkUserExtension: null })
+    if (profilePromise)
+      return profilePromise
+
+    const nuxtApp = useNuxtApp()
+    profilePromise = (async () => {
+      await ready()
+      if (!authenticated.value) {
+        const empty = { arkUser: null, arkUserExtension: null }
+        profileState.value = empty
+        profileLoaded.value = true
+        return empty
+      }
+
+      profileLoading.value = true
+      profileError.value = null
+      try {
+        const result = await nuxtApp.$arkApi.query('profile') as ArkProfileState
+        profileState.value = result
+        profileLoaded.value = true
+        return result
+      }
+      catch (cause) {
+        profileError.value = arkApiErrorMessage(cause, 'Profile load failed')
+        throw cause
+      }
+      finally {
+        profileLoading.value = false
+      }
+    })().finally(() => {
+      profilePromise = null
+    })
+    return profilePromise
+  }
+
+  function loadAccess(force = false) {
+    if (accessLoaded.value && !force)
+      return Promise.resolve(access.value ?? { capabilities: [], memberships: [] })
+    if (accessPromise)
+      return accessPromise
+
+    const nuxtApp = useNuxtApp()
+    accessPromise = (async () => {
+      await ready()
+      if (!authenticated.value) {
+        const empty = { capabilities: [], memberships: [] }
+        access.value = empty
+        accessLoaded.value = true
+        return empty
+      }
+
+      accessLoading.value = true
+      accessError.value = null
+      try {
+        const result = await nuxtApp.$arkApi.query('access') as ArkAccessState
+        access.value = result
+        accessLoaded.value = true
+        return result
+      }
+      catch (cause) {
+        accessError.value = arkApiErrorMessage(cause, 'Access check failed')
+        throw cause
+      }
+      finally {
+        accessLoading.value = false
+      }
+    })().finally(() => {
+      accessPromise = null
+    })
+    return accessPromise
+  }
+
+  function resetAccess() {
+    access.value = null
+    accessLoaded.value = false
+    accessError.value = null
+  }
+
+  function resetProfile() {
+    profileState.value = null
+    profileLoaded.value = false
+    profileError.value = null
   }
 
   async function loadAuthUi(force = false) {
@@ -121,9 +227,16 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
   function resetSession() {
     me.value = null
     checked.value = false
+    initializationPromise = null
+    resetAccess()
+    resetProfile()
   }
 
   return {
+    access,
+    accessError,
+    accessLoaded,
+    accessLoading,
     authUiLoaded,
     authUiLoading,
     authenticated,
@@ -132,8 +245,14 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
     discordOAuthStatus,
     error,
     initialize,
+    loadAccess,
     loadAuthUi,
+    loadProfile,
     me,
+    profileError,
+    profileLoaded,
+    profileLoading,
+    profileState,
     publicSettings,
     ready,
     refresh,

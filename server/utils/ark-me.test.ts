@@ -18,7 +18,7 @@ import {
 import { loadArkMeAccess } from './ark-me'
 import { resetDatabaseForTests, useDatabase } from './db'
 
-test('loadArkMeAccess returns identity and effective access in one database round trip', async () => {
+test('loadArkMeAccess returns effective access in one database round trip', async () => {
   const previousClient = process.env.DB_CLIENT
   const previousDir = process.env.DB_DATA_DIR
   const dir = await mkdtemp(join(tmpdir(), 'ark-me-access-'))
@@ -83,8 +83,6 @@ test('loadArkMeAccess returns identity and effective access in one database roun
     const access = await loadArkMeAccess(authUser!.id, countedDb)
 
     assert.equal(executeCalls, 1)
-    assert.equal(access.arkUser?.id, arkUser!.id)
-    assert.equal(access.arkUser?.displayName, 'Me User')
     assert.deepEqual(access.memberships.map(row => row.id), [membership!.id])
     assert.deepEqual(access.capabilities, [
       'channels.read',

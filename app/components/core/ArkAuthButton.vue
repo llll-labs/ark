@@ -15,13 +15,18 @@ const props = withDefaults(defineProps<{
 const route = useRoute()
 const auth = useArkAuth()
 const settingsOpen = ref(false)
-const name = computed(() => auth.me.value?.arkUser?.displayName || auth.me.value?.user?.name || '')
+const name = computed(() => auth.profile.value?.displayName || auth.me.value?.user?.name || '')
 const initials = computed(() => nameInitials(name.value, 'M'))
-const avatarSrc = computed(() => arkAvatarFileUrl(auth.me.value?.arkUser?.avatarFileId))
+const avatarSrc = computed(() => arkAvatarFileUrl(auth.profile.value?.avatarFileId))
 const loginTarget = computed(() => ({
   path: props.loginTo,
   query: route.fullPath === props.loginTo ? {} : { redirect: route.fullPath },
 }))
+
+onMounted(() => {
+  if (auth.authenticated.value)
+    void auth.loadProfile().catch(() => null)
+})
 
 </script>
 

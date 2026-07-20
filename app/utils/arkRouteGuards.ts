@@ -60,9 +60,25 @@ function redirectWithContext(nuxtApp: ReturnType<typeof useNuxtApp>, target: any
 }
 
 async function completeArkProfileIfNeeded(auth: ReturnType<typeof useArkAuth>, me: any) {
-  if (!me?.authenticated || hasArkUser(me))
+  if (!me?.authenticated)
     return me
-  return auth.completeProfile()
+  const profile = await auth.loadProfile().catch(() => ({ arkUser: null, arkUserExtension: null }))
+  const subject = { ...me, ...profile }
+  if (hasArkUser(subject))
+    return subject
+  const refreshed = await auth.completeProfile()
+  return {
+    ...refreshed,
+    arkUser: auth.profile.value,
+    arkUserExtension: auth.profileExtension.value,
+  }
+}
+
+async function withArkAccess(auth: ReturnType<typeof useArkAuth>, me: any) {
+  if (!me?.authenticated)
+    return me
+  const access = await auth.loadAccess().catch(() => ({ capabilities: [], memberships: [] }))
+  return { ...me, ...access }
 }
 
 function onboardingPolicy(settings: unknown) {
@@ -134,7 +150,8 @@ export async function runTelegramMiniAuthGuard(to: any) {
       return
 
     const target = await authenticateTelegramMiniLaunch(to.query.redirect, to.path)
-    const nextTarget = onboardingRedirectTarget(settings, auth.me.value, target) || target
+    const subject = await withArkAccess(auth, auth.me.value)
+    const nextTarget = onboardingRedirectTarget(settings, subject, target) || target
     if (nextTarget && nextTarget !== to.fullPath)
       return redirectWithContext(nuxtApp, nextTarget)
   }
@@ -199,7 +216,8 @@ export async function runArkOnboardingGuard(to: any) {
   if (to.path === '/onboarding')
     return
 
-  const target = onboardingRedirectTarget(settings, me, to.fullPath)
+  const subject = await withArkAccess(auth, me)
+  const target = onboardingRedirectTarget(settings, subject, to.fullPath)
   if (target)
     return redirectWithContext(nuxtApp, target)
 }

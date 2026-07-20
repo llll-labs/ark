@@ -21,7 +21,7 @@ const onboardingJson = computed<Record<string, any>>(() => {
 const enabled = computed(() => onboardingJson.value.enabled !== false)
 const reviewRequired = computed(() => enabled.value && Boolean(onboardingJson.value.review_required ?? onboardingJson.value.reviewRequired))
 const required = computed(() => enabled.value && Boolean(onboardingJson.value.required ?? onboardingJson.value.onboarding_required ?? reviewRequired.value))
-const profile = computed(() => data.value?.userSettings?.profile ?? data.value?.me?.arkUser ?? auth.me.value?.arkUser ?? null)
+const profile = computed(() => data.value?.userSettings?.profile ?? auth.profile.value ?? null)
 const authenticated = computed(() => Boolean(profile.value))
 const profileJson = computed<Record<string, any>>(() => {
   const value = profile.value?.profileJson

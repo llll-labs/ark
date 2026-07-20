@@ -16,7 +16,7 @@ export async function useArkOnboarding() {
       : null
     return { me, settings }
   })
-  const profile = computed(() => data.value?.settings?.profile ?? data.value?.me?.arkUser ?? null)
+  const profile = computed(() => data.value?.settings?.profile ?? auth.profile.value ?? null)
   const profileJson = computed<Record<string, unknown>>(() => {
     const value = profile.value?.profileJson
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {}

@@ -22,10 +22,17 @@ async function postAuthTarget(me: any, target?: string) {
 async function finishAuthenticated(target?: string) {
   await auth.ready()
   let me = auth.me.value
-  if (me?.authenticated && !me.arkUser)
+  let profile = me?.authenticated
+    ? await auth.loadProfile().catch(() => null)
+    : null
+  if (me?.authenticated && !profile?.arkUser) {
     me = await auth.completeProfile().catch(() => me)
-  if (me?.authenticated && me.arkUser)
-    await navigateTo(await postAuthTarget(me, target), { replace: true })
+    profile = auth.profile.value ? { arkUser: auth.profile.value, arkUserExtension: auth.profileExtension.value } : null
+  }
+  if (me?.authenticated && profile?.arkUser) {
+    const access = await auth.loadAccess().catch(() => ({ capabilities: [], memberships: [] }))
+    await navigateTo(await postAuthTarget({ ...me, ...profile, ...access }, target), { replace: true })
+  }
 }
 
 onMounted(() => {

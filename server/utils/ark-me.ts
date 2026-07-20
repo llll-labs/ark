@@ -5,21 +5,19 @@ import { queryResultRows } from './db'
 type Database = ReturnType<typeof useDatabase>
 
 interface ArkMeAccessRow {
-  ark_user: ({ id: string } & Record<string, unknown>) | null
   capabilities: string[] | null
   memberships: Record<string, unknown>[] | null
 }
 
 export interface ArkMeAccess {
-  arkUser: ({ id: string } & Record<string, unknown>) | null
   capabilities: string[]
   memberships: Record<string, unknown>[]
 }
 
 /**
- * Loads the complete Ark-owned `/me` access projection in one database round
- * trip. Session validation and optional tenant extension hydration remain
- * outside this module.
+ * Loads the Ark access projection in one database round trip. This is kept
+ * separate from `/me` so tenants that only need session identity do not pay
+ * for memberships, inherited spaces, roles, and grants on every page reload.
  */
 export async function loadArkMeAccess(authUserId: string, db: Database): Promise<ArkMeAccess> {
   const result = await db.execute(sql`
@@ -116,22 +114,6 @@ export async function loadArkMeAccess(authUserId: string, db: Database): Promise
       having bool_or(effect = 'allow') and not bool_or(effect = 'deny')
     )
     select
-      (
-        select jsonb_build_object(
-          'id', ark_user.id,
-          'authUserId', ark_user.auth_user_id,
-          'kind', ark_user.kind,
-          'handle', ark_user.handle,
-          'displayName', ark_user.display_name,
-          'avatarFileId', ark_user.avatar_file_id,
-          'bio', ark_user.bio,
-          'profileJson', ark_user.profile_json,
-          'createdAt', ark_user.created_at,
-          'updatedAt', ark_user.updated_at,
-          'deletedAt', ark_user.deleted_at
-        )
-        from ark_user
-      ) as ark_user,
       coalesce(
         (
           select jsonb_agg(jsonb_build_object(
@@ -161,7 +143,6 @@ export async function loadArkMeAccess(authUserId: string, db: Database): Promise
   const row = queryResultRows<ArkMeAccessRow>(result as any)[0]
 
   return {
-    arkUser: row?.ark_user ?? null,
     capabilities: row?.capabilities ?? [],
     memberships: row?.memberships ?? [],
   }

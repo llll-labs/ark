@@ -36,10 +36,10 @@ const open = computed({
 })
 
 const portalTitle = computed(() => props.portalTitle || t('shell.portal'))
-const viewerName = computed(() => auth.me.value?.arkUser?.displayName || auth.me.value?.user?.name || t('shell.guest'))
+const viewerName = computed(() => auth.profile.value?.displayName || auth.me.value?.user?.name || t('shell.guest'))
 const viewerInitials = computed(() => nameInitials(viewerName.value, 'M'))
 const currentRoles = computed(() => {
-  const roleIds = new Set((auth.me.value?.memberships ?? [])
+  const roleIds = new Set(auth.memberships.value
     .map((membership: { roleId?: null | string }) => membership.roleId)
     .filter(Boolean))
   return roles.value.filter(role => roleIds.has(role.id)).slice(0, 3)
@@ -62,8 +62,13 @@ function closePortal() {
 
 onMounted(async () => {
   const me = await auth.ready().catch(() => null)
-  if (me?.authenticated)
+  if (me?.authenticated) {
+    await Promise.all([
+      auth.loadAccess().catch(() => null),
+      auth.loadProfile().catch(() => null),
+    ])
     roles.value = await $arkApi.query("roles.list", {}).catch(() => [])
+  }
   checkedAuth.value = true
 })
 </script>

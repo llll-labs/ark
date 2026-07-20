@@ -6,7 +6,10 @@ export function useArkAuthedAction() {
   async function runAuthed(action: () => Promise<void> | void) {
     await auth.ready()
     const me = auth.me.value
-    if (me?.authenticated && me.arkUser) {
+    const profile = me?.authenticated
+      ? await auth.loadProfile().catch(() => null)
+      : null
+    if (me?.authenticated && profile?.arkUser) {
       await action()
       return
     }

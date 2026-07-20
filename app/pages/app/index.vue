@@ -7,10 +7,15 @@ const auth = useArkAuth()
 const appConfig = useArkAppConfig()
 await auth.ready()
 let me = auth.me.value
-if (me?.authenticated && !me.arkUser)
+let profile = me?.authenticated
+  ? (await auth.loadProfile().catch(() => null))?.arkUser
+  : null
+if (me?.authenticated && !profile) {
   me = await auth.completeProfile().catch(() => me)
+  profile = auth.profile.value
+}
 
-if (me?.authenticated && me.arkUser)
+if (me?.authenticated && profile)
   await navigateTo(appConfig.value.home, { replace: true })
 </script>
 

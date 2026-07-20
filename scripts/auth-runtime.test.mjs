@@ -43,7 +43,26 @@ test('the auth runtime owns exactly one me request implementation', () => {
   assert.equal(store.match(/\$arkApi\.query\(['"]me['"]\)/g)?.length, 1)
 })
 
-test('the one-round-trip me loader ships in the tenant package', () => {
+test('me is identity-only and access has its own lazy store request', () => {
+  const router = readFileSync(join(root, 'server/actions/routers/ark.ts'), 'utf8')
+  const store = readFileSync(join(appRoot, 'stores/arkAuthRuntime.ts'), 'utf8')
+
+  const meHandler = router.slice(router.indexOf('me: baseAction.query'), router.indexOf('\n\n  profile:'))
+  assert.doesNotMatch(meHandler, /loadArkMeAccess/)
+  assert.doesNotMatch(meHandler, /currentArkUser/)
+  assert.doesNotMatch(meHandler, /loadArkUserExtension/)
+  assert.doesNotMatch(meHandler, /arkUser:/)
+  assert.doesNotMatch(meHandler, /capabilities:/)
+  assert.doesNotMatch(meHandler, /memberships:/)
+  assert.match(router, /access: baseAction\.query/)
+  assert.match(router, /profile: baseAction\.query/)
+  assert.equal(store.match(/\$arkApi\.query\(['"]access['"]\)/g)?.length, 1)
+  assert.equal(store.match(/\$arkApi\.query\(['"]profile['"]\)/g)?.length, 1)
+  assert.match(store, /function loadAccess\(/)
+  assert.match(store, /function loadProfile\(/)
+})
+
+test('the one-round-trip access loader ships in the tenant package', () => {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   assert.equal(packageJson.files.includes('server/utils/ark-me.ts'), true)
 })
