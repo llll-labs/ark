@@ -12,7 +12,7 @@ import {
 } from './ark/shared'
 import { membersRouter, permissionsRouter, rolesRouter, spacesRouter } from './ark/spaces'
 import { usersRouter } from './ark/users'
-import { loadArkMeAccess } from '../../utils/ark-me'
+import { loadArkAccess } from '../../utils/ark-access'
 import { currentArkUser } from '../../utils/authorization'
 
 export const arkRouter = createArkActionRouter({
@@ -49,7 +49,7 @@ export const arkRouter = createArkActionRouter({
     if (!ctx.session?.user)
       return { capabilities: [] as string[], memberships: [] }
 
-    const access = await loadArkMeAccess(ctx.session.user.id, ctx.db)
+    const access = await loadArkAccess(ctx.session.user.id, ctx.db)
     return {
       capabilities: access.capabilities,
       memberships: access.memberships,

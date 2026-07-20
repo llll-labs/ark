@@ -80,7 +80,7 @@
     "server/utils/auth.ts",
     "server/utils/avatar.ts",
     "server/utils/authorization.ts",
-    "server/utils/ark-me.ts",
+    "server/utils/ark-access.ts",
     "server/utils/db.ts",
     "server/utils/discord-oauth.ts",
     "server/utils/discord-webhook.ts",

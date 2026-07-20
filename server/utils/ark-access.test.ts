@@ -15,10 +15,10 @@ import {
   arkSpaces,
   arkUsers,
 } from '../../db/schema'
-import { loadArkMeAccess } from './ark-me'
+import { loadArkAccess } from './ark-access'
 import { resetDatabaseForTests, useDatabase } from './db'
 
-test('loadArkMeAccess returns effective access in one database round trip', async () => {
+test('loadArkAccess returns effective access in one database round trip', async () => {
   const previousClient = process.env.DB_CLIENT
   const previousDir = process.env.DB_DATA_DIR
   const dir = await mkdtemp(join(tmpdir(), 'ark-me-access-'))
@@ -80,7 +80,7 @@ test('loadArkMeAccess returns effective access in one database round trip', asyn
       return db.execute(query as any)
     }) as typeof db.execute
 
-    const access = await loadArkMeAccess(authUser!.id, countedDb)
+    const access = await loadArkAccess(authUser!.id, countedDb)
 
     assert.equal(executeCalls, 1)
     assert.deepEqual(access.memberships.map(row => row.id), [membership!.id])

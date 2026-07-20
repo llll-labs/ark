@@ -48,7 +48,7 @@ test('me is identity-only and access has its own lazy store request', () => {
   const store = readFileSync(join(appRoot, 'stores/arkAuthRuntime.ts'), 'utf8')
 
   const meHandler = router.slice(router.indexOf('me: baseAction.query'), router.indexOf('\n\n  profile:'))
-  assert.doesNotMatch(meHandler, /loadArkMeAccess/)
+  assert.doesNotMatch(meHandler, /loadArkAccess/)
   assert.doesNotMatch(meHandler, /currentArkUser/)
   assert.doesNotMatch(meHandler, /loadArkUserExtension/)
   assert.doesNotMatch(meHandler, /arkUser:/)
@@ -64,5 +64,5 @@ test('me is identity-only and access has its own lazy store request', () => {
 
 test('the one-round-trip access loader ships in the tenant package', () => {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
-  assert.equal(packageJson.files.includes('server/utils/ark-me.ts'), true)
+  assert.equal(packageJson.files.includes('server/utils/ark-access.ts'), true)
 })

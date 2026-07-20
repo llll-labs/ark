@@ -4,12 +4,12 @@ import { queryResultRows } from './db'
 
 type Database = ReturnType<typeof useDatabase>
 
-interface ArkMeAccessRow {
+interface ArkAccessRow {
   capabilities: string[] | null
   memberships: Record<string, unknown>[] | null
 }
 
-export interface ArkMeAccess {
+export interface ArkAccess {
   capabilities: string[]
   memberships: Record<string, unknown>[]
 }
@@ -19,7 +19,7 @@ export interface ArkMeAccess {
  * separate from `/me` so tenants that only need session identity do not pay
  * for memberships, inherited spaces, roles, and grants on every page reload.
  */
-export async function loadArkMeAccess(authUserId: string, db: Database): Promise<ArkMeAccess> {
+export async function loadArkAccess(authUserId: string, db: Database): Promise<ArkAccess> {
   const result = await db.execute(sql`
     with recursive
     ark_user as materialized (
@@ -140,7 +140,7 @@ export async function loadArkMeAccess(authUserId: string, db: Database): Promise
         '[]'::jsonb
       ) as capabilities
   `)
-  const row = queryResultRows<ArkMeAccessRow>(result as any)[0]
+  const row = queryResultRows<ArkAccessRow>(result as any)[0]
 
   return {
     capabilities: row?.capabilities ?? [],
