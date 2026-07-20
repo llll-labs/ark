@@ -43,6 +43,15 @@ test('the auth runtime owns exactly one me request implementation', () => {
   assert.equal(store.match(/\$arkApi\.query\(['"]me['"]\)/g)?.length, 1)
 })
 
+test('the auth runtime captures the Nuxt app before asynchronous store actions run', () => {
+  const store = readFileSync(join(appRoot, 'stores/arkAuthRuntime.ts'), 'utf8')
+  const setupBody = store.slice(store.indexOf("defineStore('ark-auth-runtime'"))
+
+  assert.equal(setupBody.match(/useNuxtApp\(\)/g)?.length, 1)
+  assert.match(setupBody, /=> \{\n  const nuxtApp = useNuxtApp\(\)/)
+  assert.doesNotMatch(setupBody, /function (?:requestMe|loadProfile|loadAccess|loadAuthUi)[\s\S]*?\{[\s\S]*?const nuxtApp = useNuxtApp\(\)/)
+})
+
 test('me is identity-only and access has its own lazy store request', () => {
   const router = readFileSync(join(root, 'server/actions/routers/ark.ts'), 'utf8')
   const store = readFileSync(join(appRoot, 'stores/arkAuthRuntime.ts'), 'utf8')

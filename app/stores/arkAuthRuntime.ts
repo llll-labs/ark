@@ -30,6 +30,7 @@ export interface ArkPublicSettings {
 }
 
 export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
+  const nuxtApp = useNuxtApp()
   const me = shallowRef<ArkMeState | null>(null)
   const access = shallowRef<ArkAccessState | null>(null)
   const accessLoaded = ref(false)
@@ -59,7 +60,6 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
   function requestMe() {
     if (requestPromise)
       return requestPromise
-    const nuxtApp = useNuxtApp()
     const run = async () => {
       checking.value = true
       error.value = null
@@ -113,7 +113,6 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
     if (profilePromise)
       return profilePromise
 
-    const nuxtApp = useNuxtApp()
     profilePromise = (async () => {
       await ready()
       if (!authenticated.value) {
@@ -150,7 +149,6 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
     if (accessPromise)
       return accessPromise
 
-    const nuxtApp = useNuxtApp()
     accessPromise = (async () => {
       await ready()
       if (!authenticated.value) {
@@ -199,7 +197,6 @@ export const useArkAuthRuntimeStore = defineStore('ark-auth-runtime', () => {
     if (!force && authUiPromise)
       return authUiPromise
 
-    const nuxtApp = useNuxtApp()
     authUiPromise = (async () => {
       authUiLoading.value = true
       try {
