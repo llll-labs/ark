@@ -42,3 +42,8 @@ test('the auth runtime owns exactly one me request implementation', () => {
   const store = readFileSync(join(appRoot, 'stores/arkAuthRuntime.ts'), 'utf8')
   assert.equal(store.match(/\$arkApi\.query\(['"]me['"]\)/g)?.length, 1)
 })
+
+test('the one-round-trip me loader ships in the tenant package', () => {
+  const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+  assert.equal(packageJson.files.includes('server/utils/ark-me.ts'), true)
+})
