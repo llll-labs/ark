@@ -144,6 +144,10 @@ final class TunnelStore: ObservableObject {
 struct TunnelMenu: View {
   @ObservedObject var store: TunnelStore
 
+  private var mappingListHeight: CGFloat {
+    min(max(CGFloat(store.mappings.count) * 55, 55), 360)
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 8) {
@@ -187,7 +191,7 @@ struct TunnelMenu: View {
             }
           }
         }
-        .frame(maxHeight: 360)
+        .frame(height: mappingListHeight)
       }
 
       if let firstError = store.status?.errors.first {
@@ -264,7 +268,11 @@ struct ArkTunnelsMenuBarApp: App {
     MenuBarExtra {
       TunnelMenu(store: store)
     } label: {
-      Image(systemName: store.isHealthy ? "point.3.connected.trianglepath.dotted" : "exclamationmark.triangle")
+      HStack(spacing: 4) {
+        Image(systemName: store.isHealthy ? "point.3.connected.trianglepath.dotted" : "exclamationmark.triangle")
+        Text(String(store.mappings.count))
+          .monospacedDigit()
+      }
     }
     .menuBarExtraStyle(.window)
   }
