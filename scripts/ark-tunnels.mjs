@@ -375,12 +375,74 @@ function renderMenuBarLaunchAgentPlist(executablePath) {
 `
 }
 
-function launchTarget() {
-  return `gui/${process.getuid()}/${launchAgentLabel}`
+function launchTarget(label = launchAgentLabel) {
+  return `gui/${process.getuid()}/${label}`
 }
 
 function launchGui() {
   return `gui/${process.getuid()}`
+}
+
+function launchctlError(action, label, result) {
+  return new Error(`Could not ${action} ${label}: ${result.stderr || result.stdout || `launchctl exited ${result.status}`}`)
+}
+
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
+}
+
+function bootstrapLaunchAgent(label, plistPath, runner = spawnSync) {
+  let result
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    result = runner('launchctl', ['bootstrap', launchGui(), plistPath], { encoding: 'utf8', stdio: 'pipe' })
+    if (result.status === 0)
+      return
+    if (result.status !== 5)
+      break
+    sleepSync(100)
+  }
+  throw launchctlError('start', label, result)
+}
+
+function enableAndBootstrapLaunchAgent(label, plistPath, runner = spawnSync) {
+  const target = launchTarget(label)
+  runner('launchctl', ['bootout', target], { stdio: 'ignore' })
+  const enableResult = runner('launchctl', ['enable', target], { encoding: 'utf8', stdio: 'pipe' })
+  if (enableResult.status !== 0)
+    throw launchctlError('enable', label, enableResult)
+  bootstrapLaunchAgent(label, plistPath, runner)
+}
+
+export function startRequiredLaunchAgents(home = homedir(), runner = spawnSync) {
+  const targetPaths = paths(home)
+  enableAndBootstrapLaunchAgent(launchAgentLabel, targetPaths.launchAgentPath, runner)
+  enableAndBootstrapLaunchAgent(menuBarLaunchAgentLabel, targetPaths.menuBarLaunchAgentPath, runner)
+}
+
+function restartLaunchAgent(label, plistPath, runner = spawnSync) {
+  const target = launchTarget(label)
+  const enableResult = runner('launchctl', ['enable', target], { encoding: 'utf8', stdio: 'pipe' })
+  if (enableResult.status !== 0)
+    throw launchctlError('enable', label, enableResult)
+  const printResult = runner('launchctl', ['print', target], { encoding: 'utf8', stdio: 'pipe' })
+  const args = printResult.status === 0
+    ? ['kickstart', '-k', target]
+    : null
+  if (!args)
+    return bootstrapLaunchAgent(label, plistPath, runner)
+  const result = runner('launchctl', args, { encoding: 'utf8', stdio: 'pipe' })
+  if (result.status !== 0)
+    throw launchctlError('restart', label, result)
+}
+
+function restartRequiredLaunchAgents(home = homedir(), runner = spawnSync) {
+  const targetPaths = paths(home)
+  restartLaunchAgent(launchAgentLabel, targetPaths.launchAgentPath, runner)
+  restartLaunchAgent(menuBarLaunchAgentLabel, targetPaths.menuBarLaunchAgentPath, runner)
+}
+
+function stopLaunchAgent(label, runner = spawnSync) {
+  runner('launchctl', ['bootout', launchTarget(label)], { stdio: 'ignore' })
 }
 
 function install(home) {
@@ -405,33 +467,32 @@ function install(home) {
   if (!frpcBin || !existsSync(frpcBin))
     throw new Error('frpc is required. Install it with `brew install frpc` or set frpcBin in the tunnel config.')
 
+  prepareMenuBar(home)
   mkdirSync(dirname(targetPaths.launchAgentPath), { recursive: true })
   writeFileSync(targetPaths.launchAgentPath, renderAgentPlist(process.execPath, targetPaths.stableScriptPath, home))
-  spawnSync('launchctl', ['bootout', launchTarget()], { stdio: 'ignore' })
-  const result = spawnSync('launchctl', ['bootstrap', launchGui(), targetPaths.launchAgentPath], { encoding: 'utf8', stdio: 'pipe' })
-  if (result.status !== 0)
-    throw new Error(`Could not install ${launchAgentLabel}: ${result.stderr || result.stdout}`)
-  console.log(`Installed ${launchAgentLabel}`)
+  startRequiredLaunchAgents(home)
+  console.log(`Installed ${launchAgentLabel} and required menu bar`)
   console.log(`Config: ${targetPaths.configPath}`)
 }
 
-function restart() {
-  const result = spawnSync('launchctl', ['kickstart', '-k', launchTarget()], { encoding: 'utf8', stdio: 'pipe' })
-  if (result.status !== 0)
-    throw new Error(`Could not restart ${launchAgentLabel}: ${result.stderr || result.stdout}`)
-  console.log(`Restarted ${launchAgentLabel}`)
+function restart(home) {
+  restartRequiredLaunchAgents(home)
+  console.log(`Restarted ${launchAgentLabel} and required menu bar`)
 }
 
 function uninstall(home) {
   const targetPaths = paths(home)
-  spawnSync('launchctl', ['bootout', launchTarget()], { stdio: 'ignore' })
+  stopLaunchAgent(launchAgentLabel)
+  stopLaunchAgent(menuBarLaunchAgentLabel)
   rmSync(targetPaths.launchAgentPath, { force: true })
+  rmSync(targetPaths.menuBarLaunchAgentPath, { force: true })
+  rmSync(targetPaths.menuBarAppPath, { force: true, recursive: true })
   rmSync(targetPaths.stableRoot, { force: true, recursive: true })
   rmSync(targetPaths.statusPath, { force: true })
-  console.log(`Uninstalled ${launchAgentLabel}; preserved ${targetPaths.configPath}`)
+  console.log(`Uninstalled ${launchAgentLabel} and required menu bar; preserved ${targetPaths.configPath}`)
 }
 
-function installMenuBar(home) {
+function prepareMenuBar(home) {
   if (process.platform !== 'darwin')
     throw new Error('The Ark Tunnels menu-bar app requires macOS.')
 
@@ -460,19 +521,18 @@ function installMenuBar(home) {
 
   mkdirSync(dirname(targetPaths.menuBarLaunchAgentPath), { recursive: true })
   writeFileSync(targetPaths.menuBarLaunchAgentPath, renderMenuBarLaunchAgentPlist(appExecutable))
-  const target = `gui/${process.getuid()}/${menuBarLaunchAgentLabel}`
-  spawnSync('launchctl', ['bootout', target], { stdio: 'ignore' })
-  const result = spawnSync('launchctl', ['bootstrap', launchGui(), targetPaths.menuBarLaunchAgentPath], { encoding: 'utf8', stdio: 'pipe' })
-  if (result.status !== 0)
-    throw new Error(`Could not start ${menuBarLaunchAgentLabel}: ${result.stderr || result.stdout}`)
+}
 
+function installMenuBar(home) {
+  const targetPaths = paths(home)
+  prepareMenuBar(home)
+  enableAndBootstrapLaunchAgent(menuBarLaunchAgentLabel, targetPaths.menuBarLaunchAgentPath)
   console.log(`Installed ${targetPaths.menuBarAppPath}`)
 }
 
 function uninstallMenuBar(home) {
   const targetPaths = paths(home)
-  const target = `gui/${process.getuid()}/${menuBarLaunchAgentLabel}`
-  spawnSync('launchctl', ['bootout', target], { stdio: 'ignore' })
+  stopLaunchAgent(menuBarLaunchAgentLabel)
   rmSync(targetPaths.menuBarLaunchAgentPath, { force: true })
   rmSync(targetPaths.menuBarAppPath, { force: true, recursive: true })
   console.log('Uninstalled Ark Tunnels menu-bar app.')
@@ -483,8 +543,10 @@ function status(home, json) {
   const config = readConfig(home)
   const state = readJson(targetPaths.statusPath, null)
   const loaded = spawnSync('launchctl', ['print', launchTarget()], { stdio: 'ignore' }).status === 0
+  const menuBarLoaded = spawnSync('launchctl', ['print', launchTarget(menuBarLaunchAgentLabel)], { stdio: 'ignore' }).status === 0
   const output = {
     agent: { label: launchAgentLabel, loaded, pid: state?.pid || null, updatedAt: state?.updatedAt || null },
+    menuBar: { label: menuBarLaunchAgentLabel, loaded: menuBarLoaded },
     backends: state?.backends || [],
     configPath: targetPaths.configPath,
     errors: [...validateConfig(config), ...(state?.errors || [])],
@@ -494,6 +556,7 @@ function status(home, json) {
     return
   }
   console.log(`Ark Tunnels agent: ${loaded ? 'loaded' : 'not loaded'}${output.agent.pid ? ` (pid ${output.agent.pid})` : ''}`)
+  console.log(`Ark Tunnels menu bar: ${menuBarLoaded ? 'loaded' : 'not loaded'}`)
   console.log(`Config: ${targetPaths.configPath}`)
   for (const backend of output.backends) {
     console.log(`\n${backend.name || backend.id}: ${backend.running ? `running (pid ${backend.pid})` : 'stopped'}`)
@@ -632,7 +695,7 @@ export async function main(argv = process.argv.slice(2), home = homedir()) {
   if (command === 'status')
     return status(home, Boolean(args.json))
   if (command === 'restart')
-    return restart()
+    return restart(home)
   if (command === 'uninstall')
     return uninstall(home)
   if (command === 'menubar') {

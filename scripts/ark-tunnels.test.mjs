@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from '
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import * as arkTunnels from './ark-tunnels.mjs'
 import {
   autoLabel,
   mappingLabel,
@@ -107,4 +108,50 @@ test('agent writes status through the same backend interface', async () => {
   assert.equal(status.errors.length, 0)
   assert.equal(status.backends[0].id, 'cgburn')
   assert.equal(status.backends[0].running, false)
+})
+
+test('product lifecycle enables and bootstraps both required launch agents', () => {
+  assert.equal(typeof arkTunnels.startRequiredLaunchAgents, 'function')
+
+  const calls = []
+  const runner = (command, args) => {
+    calls.push([command, ...args])
+    return { status: 0, stdout: '', stderr: '' }
+  }
+
+  arkTunnels.startRequiredLaunchAgents('/tmp/ark-tunnels-home', runner)
+
+  const targetPaths = arkTunnels.paths('/tmp/ark-tunnels-home')
+  const services = [
+    [arkTunnels.launchAgentLabel, targetPaths.launchAgentPath],
+    [arkTunnels.menuBarLaunchAgentLabel, targetPaths.menuBarLaunchAgentPath],
+  ]
+  for (const [label, plistPath] of services) {
+    const target = `gui/${process.getuid()}/${label}`
+    assert.ok(calls.some(call => call[1] === 'enable' && call[2] === target))
+    assert.ok(calls.some(call => call[1] === 'bootstrap' && call[2] === `gui/${process.getuid()}` && call[3] === plistPath))
+  }
+})
+
+test('product lifecycle retries launchd bootstrap during asynchronous teardown', () => {
+  let bootstrapAttempts = 0
+  const runner = (_command, args) => {
+    if (args[0] === 'bootstrap') {
+      bootstrapAttempts += 1
+      if (bootstrapAttempts === 1)
+        return { status: 5, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }
+    }
+    return { status: 0, stdout: '', stderr: '' }
+  }
+
+  arkTunnels.startRequiredLaunchAgents('/tmp/ark-tunnels-home', runner)
+
+  assert.equal(bootstrapAttempts, 3)
+})
+
+test('menu bar shows exposed count in its title and gives mapping rows a real height', () => {
+  const source = readFileSync(new URL('../apps/ark-tunnels-menubar/Sources/ArkTunnelsMenuBar.swift', import.meta.url), 'utf8')
+
+  assert.match(source, /Text\(String\(store\.mappings\.count\)\)/)
+  assert.match(source, /mappingListHeight/)
 })

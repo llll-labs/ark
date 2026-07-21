@@ -189,19 +189,15 @@ pnpm exec ark-tunnels restart
 pnpm exec ark-tunnels uninstall
 ```
 
-`install` verifies the external `frpc` dependency, copies the tunnel agent to a stable user-owned location, installs one macOS LaunchAgent, and starts it. The LaunchAgent must not point into a tenant's replaceable `node_modules` tree. Local config and generated state live under `~/.config/ark-tunnels`.
+`install` verifies the external `frpc` dependency, copies the tunnel agent to a stable user-owned location, builds the native menu-bar app, and starts both required macOS LaunchAgents. It repairs persisted launchd disable state and retries the short teardown race that can follow replacement of a running agent. Neither LaunchAgent may point into a tenant's replaceable `node_modules` tree. Local config and generated state live under `~/.config/ark-tunnels`.
 
 One persistent agent owns listener scanning, range matching, generated `frpc` configuration, process supervision, status, and recovery for all configured backends. The CLI and tests cross that same interface instead of duplicating tunnel logic.
 
-### Optional menu-bar app
+### Required menu-bar app
 
-The native SwiftUI `MenuBarExtra` app provides macOS status and controls without Raycast. Install it from any Tenant App that depends on Ark:
+The native SwiftUI `MenuBarExtra` app provides macOS status and controls without Raycast. It is installed, restarted, reported, and removed together with the agent through the main `ark-tunnels` lifecycle commands.
 
-```sh
-pnpm exec ark-tunnels menubar install
-```
-
-It starts at login, reads the agent's generated `status.json`, and shows every active local port with its public URL. A port row can open or copy its URL. The footer can restart the agent or reveal `backends.json`; uninstall it with `pnpm exec ark-tunnels menubar uninstall`.
+It starts at login, reads the agent's generated `status.json`, shows the exposed-port count directly beside its menu-bar icon, and lists every active local port with its public URL. A port row can open or copy its URL. The footer can restart the agent or reveal `backends.json`.
 
 The app is a thin adapter over the agent interface and may only:
 
@@ -210,7 +206,7 @@ The app is a thin adapter over the agent interface and may only:
 - request restart or repair;
 - open configuration help.
 
-It contains no listener scanning, FRP rendering, or process-supervision logic. The local installer builds the app from the Swift sources shipped in the Ark package and places it at `~/Applications/Ark Tunnels.app`. A signed app can later be distributed through a GitHub release or Homebrew cask. The menu-bar app is not required for tunnel operation.
+It contains no listener scanning, FRP rendering, or process-supervision logic. The local installer builds the app from the Swift sources shipped in the Ark package and places it at `~/Applications/Ark Tunnels.app`. A signed app can later be distributed through a GitHub release or Homebrew cask.
 
 Remote `frps`, wildcard DNS, and TLS remain generic Studio infrastructure and are not distributed with the local Ark package.
 
@@ -259,5 +255,5 @@ operational rollout is intentionally credential-dependent:
    port appearance/removal, and agent recovery.
 4. Retire the legacy Horse LaunchAgent after the new agent has passed those
    checks.
-5. Optionally build the signed SwiftUI menu-bar adapter after the CLI/agent
-   workflow is stable, without moving tunnel logic into it.
+5. Sign and package the required SwiftUI menu-bar adapter after the combined
+   CLI lifecycle is stable, without moving tunnel logic into it.
