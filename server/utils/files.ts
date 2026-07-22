@@ -75,6 +75,40 @@ async function maybeSharp(input: Buffer) {
   }
 }
 
+const genericRemoteMimeTypes = new Set([
+  'application/binary',
+  'application/octet-stream',
+  'binary/octet-stream',
+])
+
+const sharpImageMimeTypes: Record<string, string> = {
+  avif: 'image/avif',
+  gif: 'image/gif',
+  heif: 'image/heif',
+  jpeg: 'image/jpeg',
+  jp2: 'image/jp2',
+  jxl: 'image/jxl',
+  png: 'image/png',
+  svg: 'image/svg+xml',
+  tiff: 'image/tiff',
+  webp: 'image/webp',
+}
+
+async function remoteFileMimeType(data: Buffer, declaredMimeType?: string) {
+  if (declaredMimeType && !genericRemoteMimeTypes.has(declaredMimeType))
+    return declaredMimeType
+  try {
+    const image = await maybeSharp(data)
+    const format = (await image?.metadata())?.format
+    if (format && sharpImageMimeTypes[format])
+      return sharpImageMimeTypes[format]
+  }
+  catch {
+    // Generic remote files that are not readable images remain generic files.
+  }
+  return declaredMimeType ?? 'application/octet-stream'
+}
+
 export async function storeFileFromBuffer(input: StoreFileFromBufferInput, context?: ArkFileResourceContext) {
   registerCoreArkResources()
   const db = useDatabase()
@@ -341,11 +375,12 @@ export async function uploadArkFileByUrl(
     url: _url,
     ...fileInput
   } = input
+  const mimeType = input.mimeType ?? await remoteFileMimeType(data, headerMimeType)
   return storeFileFromBuffer({
     ...fileInput,
     accessMode: 'signed_only',
     data,
-    mimeType: input.mimeType ?? headerMimeType ?? 'application/octet-stream',
+    mimeType,
     originalFilename: input.originalFilename ?? input.filename ?? remoteFilename(url),
     variantVisibility: 'public',
     visibility: 'private',
