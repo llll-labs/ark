@@ -106,6 +106,48 @@ test('remote images keep one private original with public variants on the same f
     await access(join(publicRoot, variant.path))
 })
 
+test('remote images are detected when the server sends a generic content type', async () => {
+  const privateRoot = await mkdtemp(join(tmpdir(), 'ark-remote-generic-private-'))
+  const publicRoot = await mkdtemp(join(tmpdir(), 'ark-remote-generic-public-'))
+  process.env.STORAGE_LOCATIONS = 'private,public'
+  process.env.STORAGE_PRIVATE_DRIVER = 'local'
+  process.env.STORAGE_PRIVATE_ROOT = privateRoot
+  process.env.STORAGE_PUBLIC_DRIVER = 'local'
+  process.env.STORAGE_PUBLIC_ROOT = publicRoot
+  process.env.STORAGE_PRIVATE_LOCATION = 'private'
+  process.env.STORAGE_PUBLIC_LOCATION = 'public'
+  resetStorageConfigForTests()
+
+  const sharp = (await import('sharp')).default
+  const sourceData = await sharp({
+    create: { background: '#2255aa', channels: 3, height: 200, width: 400 },
+  }).jpeg().toBuffer()
+  const file = await uploadArkFileByUrl({
+    originalFilename: 'remote-image',
+    url: 'https://media.example.com/preview.jpg',
+  }, {
+    async fetcher() {
+      return new Response(sourceData, {
+        headers: {
+          'Content-Length': String(sourceData.length),
+          'Content-Type': 'binary/octet-stream',
+        },
+      })
+    },
+    async resolveHostname() {
+      return ['93.184.216.34']
+    },
+  })
+
+  assert.equal(file.mimeType, 'image/jpeg')
+  assert.match(file.path, /\.jpeg$/)
+  await access(join(privateRoot, file.path))
+  const variants = await useDatabase().select().from(arkFileVariants)
+    .where(eq(arkFileVariants.fileId, file.id))
+  assert.deepEqual(variants.map(variant => variant.kind).sort(), ['preview', 'thumb'])
+  assert.deepEqual([...new Set(variants.map(variant => variant.storage))], ['public'])
+})
+
 test('remote file imports reject private network targets before fetching', async () => {
   let fetchCount = 0
   await assert.rejects(() => uploadArkFileByUrl({
