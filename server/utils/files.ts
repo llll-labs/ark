@@ -1,6 +1,9 @@
 import type { Readable } from 'node:stream'
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
+import { lookup } from 'node:dns/promises'
+import { BlockList, isIP } from 'node:net'
+import { basename } from 'node:path'
 import { and, eq, isNull } from 'drizzle-orm'
 import { arkFiles, arkFileVariants } from '../../db/schema'
 import type { ArkResourceAccountability, ArkResourceServices } from '../resources/types'
@@ -42,7 +45,19 @@ export interface StoreFileFromBufferInput {
   onRollbackCleanup?: (cleanup: () => Promise<void>) => void
   originalFilename?: string
   ownerArkUserId?: null | string
+  variantVisibility?: 'private' | 'public'
   visibility?: 'private' | 'public'
+}
+
+export interface UploadArkFileByUrlInput extends Omit<StoreFileFromBufferInput, 'accessMode' | 'data' | 'variantVisibility' | 'visibility'> {
+  maximumBytes?: number
+  timeoutMs?: number
+  url: string
+}
+
+export interface UploadArkFileByUrlDependencies {
+  fetcher?: typeof fetch
+  resolveHostname?: (hostname: string) => Promise<string[]>
 }
 
 export interface ArkFileResourceContext {
@@ -74,7 +89,8 @@ export async function storeFileFromBuffer(input: StoreFileFromBufferInput, conte
   if (visibility !== 'public' && accessMode === 'public')
     throw new Error('Private Ark files cannot use public access mode.')
   const originalStorage = visibility === 'public' ? defaultPublicStorage() : defaultPrivateStorage()
-  const variantStorage = originalStorage
+  const variantVisibility = input.variantVisibility ?? visibility
+  const variantStorage = variantVisibility === 'public' ? defaultPublicStorage() : defaultPrivateStorage()
   const sizeBytes = input.data.length
   const checksum = createHash('sha256').update(input.data).digest('hex')
   const variants: StoredVariant[] = []
@@ -181,6 +197,159 @@ export async function storeFileFromBuffer(input: StoreFileFromBufferInput, conte
     await cleanup()
     throw error
   }
+}
+
+const blockedRemoteAddresses = new BlockList()
+for (const [address, prefix] of [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+] as const) {
+  blockedRemoteAddresses.addSubnet(address, prefix, 'ipv4')
+}
+for (const [address, prefix] of [
+  ['::', 128],
+  ['::1', 128],
+  ['2001:db8::', 32],
+  ['fc00::', 7],
+  ['fe80::', 10],
+  ['ff00::', 8],
+] as const) {
+  blockedRemoteAddresses.addSubnet(address, prefix, 'ipv6')
+}
+
+async function resolveRemoteHostname(hostname: string) {
+  if (isIP(hostname))
+    return [hostname]
+  return (await lookup(hostname, { all: true, verbatim: true })).map(result => result.address)
+}
+
+async function assertRemoteUrlAllowed(url: URL, resolveHostname: (hostname: string) => Promise<string[]>) {
+  if (!['http:', 'https:'].includes(url.protocol))
+    throw new Error('Remote Ark files require an HTTP or HTTPS URL.')
+  if (url.username || url.password)
+    throw new Error('Remote Ark file URLs must not contain credentials.')
+  if (url.hostname.toLowerCase() === 'localhost' || url.hostname.toLowerCase().endsWith('.localhost'))
+    throw new Error('Remote Ark file URL resolves to a private address.')
+  const addresses = await resolveHostname(url.hostname)
+  if (!addresses.length || addresses.some((address) => {
+    const mappedIpv4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address)?.[1]
+    if (mappedIpv4)
+      return blockedRemoteAddresses.check(mappedIpv4, 'ipv4')
+    const family = isIP(address)
+    return !family || blockedRemoteAddresses.check(address, family === 6 ? 'ipv6' : 'ipv4')
+  })) {
+    throw new Error('Remote Ark file URL resolves to a private address.')
+  }
+}
+
+async function readRemoteResponse(response: Response, maximumBytes: number) {
+  const declaredSize = Number.parseInt(response.headers.get('content-length') ?? '', 10)
+  if (Number.isFinite(declaredSize) && declaredSize > maximumBytes) {
+    await response.body?.cancel().catch(() => {})
+    throw new Error(`Remote Ark file exceeds ${maximumBytes} bytes.`)
+  }
+  if (!response.body)
+    throw new Error('Remote Ark file response has no body.')
+
+  const reader = response.body.getReader()
+  const chunks: Buffer[] = []
+  let size = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done)
+      return Buffer.concat(chunks)
+    size += value.byteLength
+    if (size > maximumBytes) {
+      await reader.cancel().catch(() => {})
+      throw new Error(`Remote Ark file exceeds ${maximumBytes} bytes.`)
+    }
+    chunks.push(Buffer.from(value))
+  }
+}
+
+function remoteFilename(url: URL) {
+  const value = basename(url.pathname)
+  if (!value)
+    return undefined
+  try {
+    return decodeURIComponent(value)
+  }
+  catch {
+    return value
+  }
+}
+
+/**
+ * Imports a trusted remote file as one private Ark original. Image variants are
+ * stored in public storage and remain related to that original through
+ * ark.file_variants.file_id; the private original itself is never made public.
+ */
+export async function uploadArkFileByUrl(
+  input: UploadArkFileByUrlInput,
+  dependencies: UploadArkFileByUrlDependencies = {},
+) {
+  const maximumBytes = input.maximumBytes ?? 25_000_000
+  const timeoutMs = input.timeoutMs ?? 30_000
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1)
+    throw new Error('Remote Ark file maximumBytes must be a positive integer.')
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
+    throw new Error('Remote Ark file timeoutMs must be a positive integer.')
+
+  const fetcher = dependencies.fetcher ?? globalThis.fetch
+  const resolveHostname = dependencies.resolveHostname ?? resolveRemoteHostname
+  let url = new URL(input.url)
+  let response: Response | null = null
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    await assertRemoteUrlAllowed(url, resolveHostname)
+    response = await fetcher(url, {
+      headers: { Accept: '*/*' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (![301, 302, 303, 307, 308].includes(response.status))
+      break
+    const location = response.headers.get('location')
+    await response.body?.cancel().catch(() => {})
+    if (!location)
+      throw new Error(`Remote Ark file redirect ${response.status} has no location.`)
+    if (redirects === 5)
+      throw new Error('Remote Ark file exceeded 5 redirects.')
+    url = new URL(location, url)
+  }
+  if (!response?.ok) {
+    await response?.body?.cancel().catch(() => {})
+    throw new Error(`Remote Ark file download failed: ${response?.status ?? 0} ${response?.statusText ?? 'Unknown Error'}`)
+  }
+
+  const data = await readRemoteResponse(response, maximumBytes)
+  const headerMimeType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase()
+  const {
+    maximumBytes: _maximumBytes,
+    timeoutMs: _timeoutMs,
+    url: _url,
+    ...fileInput
+  } = input
+  return storeFileFromBuffer({
+    ...fileInput,
+    accessMode: 'signed_only',
+    data,
+    mimeType: input.mimeType ?? headerMimeType ?? 'application/octet-stream',
+    originalFilename: input.originalFilename ?? input.filename ?? remoteFilename(url),
+    variantVisibility: 'public',
+    visibility: 'private',
+  })
 }
 
 function safeDispositionFilename(value: string) {
