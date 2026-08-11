@@ -99,6 +99,7 @@
     "server/utils/provider-avatar-rules.ts",
     "server/utils/provider-avatar.ts",
     "server/utils/realtime.ts",
+    "server/utils/registration.ts",
     "server/utils/secret.ts",
     "server/utils/storage.ts",
     "server/utils/telegram-auth.ts",
