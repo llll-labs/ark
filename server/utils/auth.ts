@@ -1,6 +1,8 @@
 import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { betterAuth } from 'better-auth'
+import { APIError } from 'better-auth/api'
 import { emailOTP, genericOAuth } from 'better-auth/plugins'
+import { eq } from 'drizzle-orm'
 import * as schema from '../../db/schema'
 import { useDatabase } from './db'
 import {
@@ -20,6 +22,7 @@ import {
 } from './telegram-oauth'
 import { sendEmail } from './email'
 import { emailOtpCopy, passwordResetLinkCopy, requestEmailLocale, type EmailOtpPurpose } from './email-otp'
+import { arkSelfRegistrationAllowed } from './registration'
 import { uuidv7 } from './uuid'
 
 const appPort = process.env.PORT ?? '5400'
@@ -112,6 +115,25 @@ export const auth = betterAuth({
     provider: 'pg',
     schema,
   }),
+  databaseHooks: {
+    user: {
+      create: {
+        before: async (user) => {
+          const db = useDatabase()
+          const [settings] = await db.select({ authJson: schema.arkSettings.authJson })
+            .from(schema.arkSettings)
+            .where(eq(schema.arkSettings.key, 'main'))
+            .limit(1)
+          if (!arkSelfRegistrationAllowed(settings?.authJson)) {
+            throw new APIError('FORBIDDEN', {
+              message: 'Registration is closed.',
+            })
+          }
+          return { data: user }
+        },
+      },
+    },
+  },
   emailVerification: {
     autoSignInAfterVerification: true,
     sendOnSignIn: false,
