@@ -1,8 +1,8 @@
-# @kurark/ark
+# Ark
 
-Experimental alpha Ark runtime for tenant applications.
+Create communities — chat, forums, spaces, and a marketplace. Open-source and Discord-like, yours to extend.
 
-Ark is the technical runtime: package, database schema, API routes, composables, and table exports. Kurark is the public discovery/product surface for arks.
+Ark is the runtime you build on. Kurark is the public discovery surface for arks.
 
 ## Concepts
 
